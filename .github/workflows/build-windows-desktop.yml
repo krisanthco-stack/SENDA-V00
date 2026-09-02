@@ -14,12 +14,39 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - name: Setup Python 3.12
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.12'
+
+      - name: Resolve release metadata
+        id: meta
+        shell: pwsh
+        run: |
+          $version = python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])"
+          if ($LASTEXITCODE -ne 0 -or $version -notmatch '^\d+\.\d+\.\d+$') {
+            throw "No se pudo obtener una versión válida desde pyproject.toml: '$version'"
+          }
+          $tag = "v$version"
+          $asset = "SENDA.V0_${version}_WINDOWS_DESKTOP.zip"
+          $artifact = "SENDA.V0-${version}-Windows-Desktop"
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "asset=$asset" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "artifact=$artifact" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "SENDA_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "SENDA_TAG=$tag" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "SENDA_ASSET=$asset" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "Versión resuelta: $version"
+          Write-Host "Paquete: $asset"
+
+          if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME -ne $tag) {
+            throw "El tag ejecutado '$($env:GITHUB_REF_NAME)' no coincide con la versión de pyproject.toml '$tag'."
+          }
 
       - name: Restore hidden Pages marker for regression suite
         shell: pwsh
@@ -28,11 +55,16 @@ jobs:
             New-Item -ItemType File -Path '.nojekyll' -Force | Out-Null
           }
 
-      - name: Install build dependencies
+      - name: Install pinned build dependencies
         shell: pwsh
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pyinstaller openpyxl xlsxwriter xlrd pytest
+          python -m pip install `
+            pyinstaller==6.22.2 `
+            openpyxl==3.1.5 `
+            xlsxwriter==3.2.9 `
+            xlrd==2.0.2 `
+            pytest==9.0.2
 
       - name: Run tests
         shell: pwsh
@@ -72,23 +104,91 @@ jobs:
       - name: Assemble installer folder
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force release | Out-Null
-          Copy-Item -Recurse dist/SENDA.V0 release/SENDA.V0
+          $asset = '${{ steps.meta.outputs.asset }}'
+          Remove-Item release -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force release/SENDA.V0 | Out-Null
+          Copy-Item -Path 'dist/SENDA.V0/*' -Destination 'release/SENDA.V0' -Recurse -Force
           New-Item -ItemType Directory -Force release/SENDA.V0/scripts | Out-Null
           Copy-Item scripts/install_desktop.ps1 release/SENDA.V0/scripts/
           Copy-Item scripts/update_desktop.ps1 release/SENDA.V0/scripts/
           Copy-Item scripts/uninstall_desktop.ps1 release/SENDA.V0/scripts/
+          Copy-Item scripts/install_from_github.ps1 release/SENDA.V0/scripts/
           Copy-Item INSTALAR_SENDA_V0.bat release/SENDA.V0/
+          Copy-Item INSTALAR_DESDE_GITHUB.bat release/SENDA.V0/
           Copy-Item ACTUALIZAR_SENDA_V0.bat release/SENDA.V0/
           Copy-Item DESINSTALAR_SENDA_V0.bat release/SENDA.V0/
           Copy-Item MANTENIMIENTO_SENDA_V0.bat release/SENDA.V0/
-          Compress-Archive -Path release/SENDA.V0/* -DestinationPath SENDA.V0_0.4.1_WINDOWS_DESKTOP.zip -Force
+          Compress-Archive -Path release/SENDA.V0/* -DestinationPath $asset -Force
+
+      - name: Verify release package
+        shell: pwsh
+        run: |
+          $asset = '${{ steps.meta.outputs.asset }}'
+          if (-not (Test-Path $asset)) { throw "No existe el paquete $asset" }
+          if ((Get-Item $asset).Length -lt 100000) { throw "El paquete $asset es demasiado pequeño" }
+
+          $verifyRoot = Join-Path $env:RUNNER_TEMP 'senda-release-verify'
+          Remove-Item $verifyRoot -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force $verifyRoot | Out-Null
+          Expand-Archive -Path $asset -DestinationPath $verifyRoot -Force
+
+          $required = @(
+            'SENDA.V0.exe',
+            'scripts/install_desktop.ps1',
+            'scripts/update_desktop.ps1',
+            'scripts/uninstall_desktop.ps1',
+            'scripts/install_from_github.ps1',
+            'INSTALAR_SENDA_V0.bat',
+            'INSTALAR_DESDE_GITHUB.bat',
+            'ACTUALIZAR_SENDA_V0.bat',
+            'DESINSTALAR_SENDA_V0.bat'
+          )
+          foreach ($relative in $required) {
+            $candidate = Join-Path $verifyRoot $relative
+            if (-not (Test-Path $candidate)) {
+              throw "El paquete no contiene el archivo obligatorio: $relative"
+            }
+          }
+
+          $exe = Join-Path $verifyRoot 'SENDA.V0.exe'
+          $p = Start-Process -FilePath $exe -ArgumentList '--check' -Wait -PassThru
+          if ($p.ExitCode -ne 0) {
+            throw "El EXE extraído del ZIP falló --check con código $($p.ExitCode)"
+          }
+
+          $sha = (Get-FileHash -Algorithm SHA256 -Path $asset).Hash.ToLowerInvariant()
+          Write-Host "SHA-256 $asset = $sha"
+          "SHA256=$sha" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Validate release tag safety
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          $tag = '${{ steps.meta.outputs.tag }}'
+          $tagLines = @(git ls-remote --tags origin "refs/tags/$tag" "refs/tags/$tag^{}")
+          if ($LASTEXITCODE -ne 0) { throw 'No se pudieron consultar los tags remotos.' }
+
+          $existingTagSha = $null
+          $peeled = $tagLines | Where-Object { $_ -match '\^\{\}$' } | Select-Object -First 1
+          $direct = $tagLines | Where-Object { $_ -notmatch '\^\{\}$' } | Select-Object -First 1
+          $selected = if ($peeled) { $peeled } else { $direct }
+          if ($selected) { $existingTagSha = ($selected -split '\s+')[0] }
+
+          if ($existingTagSha -and $existingTagSha -ne $env:GITHUB_SHA) {
+            throw "El tag $tag ya existe y apunta a otro commit ($existingTagSha), no al commit actual $($env:GITHUB_SHA)."
+          }
+          if ($existingTagSha) {
+            Write-Host "Tag existente validado: $tag -> $existingTagSha"
+          } else {
+            Write-Host "El tag $tag aún no existe; la Release podrá crearlo sobre $($env:GITHUB_SHA)."
+          }
 
       - name: Upload Windows Desktop artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
-          name: SENDA.V0-0.4.1-Windows-Desktop
-          path: SENDA.V0_0.4.1_WINDOWS_DESKTOP.zip
+          name: ${{ steps.meta.outputs.artifact }}
+          path: ${{ steps.meta.outputs.asset }}
           if-no-files-found: error
 
       - name: Publish installable GitHub Release
@@ -96,12 +196,29 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: pwsh
         run: |
-          $tag = 'v0.4.1'
-          $asset = 'SENDA.V0_0.4.1_WINDOWS_DESKTOP.zip'
-          gh release view $tag *> $null
-          if ($LASTEXITCODE -ne 0) {
-            gh release create $tag $asset --target $env:GITHUB_SHA --title 'SENDA.V0 0.4.1' --notes 'SENDA.V0 Desktop para Windows. Incluye instalación local, XLS/XLSX/CSV/JSON/TXT/ZIP/RAR, estadísticas de Inicio y protección contra cargas duplicadas.' --latest
-          } else {
+          $version = '${{ steps.meta.outputs.version }}'
+          $tag = '${{ steps.meta.outputs.tag }}'
+          $asset = '${{ steps.meta.outputs.asset }}'
+          $title = "SENDA.V0 $version"
+          $notes = "SENDA.V0 Desktop para Windows. Incluye instalación local, botón Actualizar desde GitHub, XLS/XLSX/CSV/JSON/TXT/ZIP/RAR, estadísticas de Inicio y Gestión, alarmas visibles, deduplicación, trámites pendientes y Base SENDA Excel/JSON fusionable entre computadoras. SHA-256: $env:SHA256"
+
+          $releaseTags = @(gh release list --limit 100 --json tagName --jq '.[].tagName')
+          if ($LASTEXITCODE -ne 0) { throw 'No se pudo consultar la lista de Releases.' }
+          $releaseExists = $releaseTags -contains $tag
+
+          $tagLines = @(git ls-remote --tags origin "refs/tags/$tag" "refs/tags/$tag^{}")
+          if ($LASTEXITCODE -ne 0) { throw 'No se pudieron consultar los tags antes de publicar.' }
+          $tagExists = $tagLines.Count -gt 0
+
+          if ($releaseExists) {
             gh release upload $tag $asset --clobber
-            gh release edit $tag --latest
+            if ($LASTEXITCODE -ne 0) { throw "No se pudo actualizar el asset de la Release $tag." }
+            gh release edit $tag --title $title --notes $notes --latest
+            if ($LASTEXITCODE -ne 0) { throw "No se pudo actualizar la Release $tag." }
+          } elseif ($tagExists) {
+            gh release create $tag $asset --verify-tag --title $title --notes $notes --latest
+            if ($LASTEXITCODE -ne 0) { throw "No se pudo crear la Release usando el tag existente $tag." }
+          } else {
+            gh release create $tag $asset --target $env:GITHUB_SHA --title $title --notes $notes --latest
+            if ($LASTEXITCODE -ne 0) { throw "No se pudo crear la Release $tag." }
           }
