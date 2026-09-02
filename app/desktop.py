@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import os
 import queue
+import subprocess
 import sys
 import threading
 import traceback
@@ -17,10 +18,11 @@ except Exception as exc:  # pragma: no cover - only on broken Python installatio
 
 from .desktop_model import (
     ALARMS, DISTRICTS, MONTHS, MOVEMENT_CATEGORIES, PAGE_SIZES, QUARTERS,
-    available_years, create_context, export_movements, filters_from_values, import_files,
+    available_years, create_context, export_movements, filters_from_values, import_files, export_sync_database,
+    alarm_visual, information_alarm_row,
 )
 
-APP_TITLE = 'SENDA.V0 0.4.1 · Escritorio'
+APP_TITLE = 'SENDA.V0 0.4.2 · Escritorio'
 BG = '#eef2f6'
 NAVY = '#15314b'
 GOLD = '#cfa43a'
@@ -36,13 +38,13 @@ ALARM_GREEN = '#16a34a'
 CHART_COLORS = ('#0b6fc2','#2563eb','#7c3aed','#0f766e','#ea580c','#be123c','#64748b','#0891b2')
 
 # Escala tipográfica: lectura cómoda sin perder densidad en pantallas de oficina.
-BODY_FONT_SIZE = 10
-PANEL_TITLE_SIZE = 12
-SECTION_TITLE_SIZE = 19
-NAV_FONT_SIZE = 11
-KPI_VALUE_SIZE = 20
-KPI_LABEL_SIZE = 10
-SMALL_FONT_SIZE = 9
+BODY_FONT_SIZE = 12
+PANEL_TITLE_SIZE = 14
+SECTION_TITLE_SIZE = 23
+NAV_FONT_SIZE = 13
+KPI_VALUE_SIZE = 24
+KPI_LABEL_SIZE = 12
+SMALL_FONT_SIZE = 11
 
 
 def _safe_text(value):
@@ -55,6 +57,43 @@ def _rounded_rect(canvas, x1, y1, x2, y2, radius=14, **kwargs):
               x2,y2-radius, x2,y2, x2-radius,y2, x1+radius,y2,
               x1,y2, x1,y2-radius, x1,y1+radius, x1,y1]
     return canvas.create_polygon(points, smooth=True, splinesteps=24, **kwargs)
+
+
+class RoundedButton(tk.Canvas):
+    """Botón Canvas con esquinas redondeadas y estado disabled compatible con Tk."""
+    def __init__(self,parent,text,command=None,*,fill=WHITE,fg=NAVY,hover_fill='#edf3f8',outline=BORDER,canvas_bg=None,height=38,width=None,font_size=None,bold=True,state='normal'):
+        self.text=text;self.command=command;self.fill=fill;self.fg=fg;self.hover_fill=hover_fill;self.outline=outline;self._state=state;self._hover=False
+        self.font_size=font_size or BODY_FONT_SIZE;self.bold=bold
+        auto_width=max(92,int(len(str(text))*self.font_size*.68)+34)
+        try: parent_bg=parent.cget('background')
+        except Exception: parent_bg=BG
+        super().__init__(parent,width=width or auto_width,height=height,bg=canvas_bg or parent_bg or BG,highlightthickness=0,bd=0,cursor=('hand2' if state!='disabled' else 'arrow'))
+        self.bind('<Configure>',lambda e:self._draw());self.bind('<Enter>',self._enter);self.bind('<Leave>',self._leave);self.bind('<Button-1>',self._click)
+        self._draw()
+    def _enter(self,event=None):
+        if self._state!='disabled':self._hover=True;self._draw()
+    def _leave(self,event=None):self._hover=False;self._draw()
+    def _click(self,event=None):
+        if self._state!='disabled' and self.command:self.command()
+    def _draw(self):
+        self.delete('all');w=max(20,self.winfo_width());h=max(20,self.winfo_height())
+        if self._state=='disabled':fill='#e5e7eb';fg='#94a3b8';outline='#d1d5db'
+        else:fill=self.hover_fill if self._hover else self.fill;fg=self.fg;outline=self.outline
+        _rounded_rect(self,2,2,w-2,h-2,10,fill=fill,outline=outline,width=1)
+        self.create_text(w/2,h/2,text=self.text,fill=fg,font=('Segoe UI',self.font_size,'bold' if self.bold else 'normal'))
+    def configure(self,cnf=None,**kwargs):
+        if cnf:kwargs.update(cnf)
+        handled=False
+        for key in ('state','text','command'):
+            if key in kwargs:
+                handled=True;val=kwargs.pop(key)
+                if key=='state':self._state=str(val);super().configure(cursor=('arrow' if self._state=='disabled' else 'hand2'))
+                elif key=='text':self.text=str(val)
+                else:self.command=val
+        if kwargs:super().configure(**kwargs)
+        if handled:self._draw()
+        return None
+    config=configure
 
 
 class KpiCard(tk.Canvas):
@@ -168,15 +207,15 @@ class SendaDesktop(tk.Tk):
         style.configure('KpiValue.TLabel', background=WHITE, foreground=NAVY, font=('Segoe UI', KPI_VALUE_SIZE, 'bold'))
         style.configure('KpiLabel.TLabel', background=WHITE, foreground=MUTED, font=('Segoe UI', KPI_LABEL_SIZE, 'bold'))
         style.configure('Gold.TButton', font=('Segoe UI', BODY_FONT_SIZE, 'bold'))
-        style.configure('Treeview', rowheight=31, font=('Segoe UI', BODY_FONT_SIZE))
+        style.configure('Treeview', rowheight=37, font=('Segoe UI', BODY_FONT_SIZE))
         style.configure('Treeview.Heading', font=('Segoe UI', BODY_FONT_SIZE, 'bold'))
         style.configure('TNotebook.Tab', padding=(20, 10), font=('Segoe UI', NAV_FONT_SIZE, 'bold'))
         style.configure('TNotebook', background=BG, borderwidth=0)
         style.map('TNotebook.Tab', background=[('selected', WHITE), ('!selected', '#dbe7f1')], foreground=[('selected', BLUE_DARK), ('!selected', NAVY)])
         style.configure('TLabel', background=BG, foreground=NAVY, font=('Segoe UI', BODY_FONT_SIZE))
         style.configure('TButton', font=('Segoe UI', BODY_FONT_SIZE, 'bold'), padding=(9, 5))
-        style.configure('TCombobox', padding=3)
-        style.configure('TEntry', padding=4)
+        style.configure('TCombobox', padding=4, font=('Segoe UI', BODY_FONT_SIZE))
+        style.configure('TEntry', padding=5, font=('Segoe UI', BODY_FONT_SIZE))
 
     def _build_shell(self):
         header = tk.Frame(self, bg=NAVY, height=62)
@@ -184,7 +223,12 @@ class SendaDesktop(tk.Tk):
         tk.Label(header, text='SENDA.V0', bg=NAVY, fg=WHITE, font=('Segoe UI', SECTION_TITLE_SIZE, 'bold')).pack(side='left', padx=(18,8), pady=13)
         tk.Label(header, text='Gestión registral local · Escritorio', bg=NAVY, fg='#cbd5df', font=('Segoe UI', BODY_FONT_SIZE)).pack(side='left', pady=17)
         self.connection_badge = tk.Label(header, text='● LOCAL · OFFLINE', bg=NAVY, fg='#7dd3a7', font=('Segoe UI', BODY_FONT_SIZE, 'bold'))
-        self.connection_badge.pack(side='right', padx=18)
+        self.connection_badge.pack(side='right', padx=(10,18))
+        self.github_update_button = RoundedButton(
+            header, text='↻ ACTUALIZAR DESDE GITHUB', command=self._update_from_github,
+            fill='#16834f', fg=WHITE, hover_fill='#116b41', outline='#16834f', canvas_bg=NAVY, height=40
+        )
+        self.github_update_button.pack(side='right', padx=(8,0), pady=11)
 
         self.notebook = ttk.Notebook(self)
         self.notebook.pack(fill='both', expand=True, padx=12, pady=(10,12))
@@ -204,6 +248,47 @@ class SendaDesktop(tk.Tk):
 
         self.status_var = tk.StringVar(value=f'Datos: {self.ctx.data_root}')
         tk.Label(self, textvariable=self.status_var, anchor='w', bg='#dfe6ed', fg=NAVY, font=('Segoe UI', BODY_FONT_SIZE)).pack(fill='x', side='bottom', ipady=5, padx=0)
+
+    def _github_updater_script(self):
+        if getattr(sys, 'frozen', False):
+            roots = [Path(sys.executable).resolve().parent]
+        else:
+            roots = [Path(__file__).resolve().parents[1]]
+        for root in roots:
+            script = root / 'scripts' / 'install_from_github.ps1'
+            if script.is_file():
+                return script
+        return None
+
+    def _update_from_github(self):
+        if os.name != 'nt':
+            return messagebox.showinfo('SENDA.V0', 'La actualización automática desde GitHub está disponible en Windows.')
+        script = self._github_updater_script()
+        if script is None:
+            return messagebox.showerror(
+                'SENDA.V0',
+                'No se encontró el actualizador de GitHub en esta instalación.\n\n'
+                'Instale primero el paquete Desktop corregido desde la Release de GitHub.'
+            )
+        ok = messagebox.askyesno(
+            'Actualizar SENDA.V0',
+            'SENDA buscará la última versión publicada en GitHub.\n\n'
+            'La aplicación se cerrará durante la actualización y volverá a abrirse al terminar.\n'
+            'Los datos guardados en %LOCALAPPDATA%\\SENDA.V0 NO se borrarán.\n\n'
+            '¿Desea continuar?'
+        )
+        if not ok:
+            return
+        try:
+            flags = getattr(subprocess, 'CREATE_NEW_CONSOLE', 0)
+            subprocess.Popen(
+                ['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(script)],
+                cwd=str(script.parent.parent), creationflags=flags
+            )
+            self.status_var.set('Actualizador iniciado. SENDA se cerrará para instalar la última versión...')
+            self.github_update_button.configure(state='disabled', text='ACTUALIZANDO...')
+        except Exception as exc:
+            messagebox.showerror('SENDA.V0', f'No fue posible iniciar la actualización desde GitHub.\n\n{exc}')
 
     def _filter_bar(self, parent, *, include_movement=True, callback=None):
         bar = ttk.Frame(parent)
@@ -229,8 +314,8 @@ class SendaDesktop(tk.Tk):
         ent.pack(side='left', padx=(0,6))
         if callback:
             ent.bind('<Return>', lambda e: callback())
-            ttk.Button(bar, text='Aplicar', command=callback).pack(side='left')
-            ttk.Button(bar, text='Limpiar', command=lambda: self._clear_filter_values(values, callback)).pack(side='left', padx=4)
+            RoundedButton(bar, text='Aplicar', command=callback).pack(side='left')
+            RoundedButton(bar, text='Limpiar', command=lambda: self._clear_filter_values(values, callback)).pack(side='left', padx=4)
         return values
 
     def _clear_filter_values(self, values, callback):
@@ -269,10 +354,8 @@ class SendaDesktop(tk.Tk):
         return frame
 
     def _action_button(self,parent,text,command,primary=False):
-        return tk.Button(parent,text=text,command=command,bg=(BLUE if primary else WHITE),fg=(WHITE if primary else NAVY),
-                         activebackground=(BLUE_DARK if primary else '#edf3f8'),activeforeground=(WHITE if primary else NAVY),
-                         relief='flat',bd=0,padx=12,pady=5,font=('Segoe UI',BODY_FONT_SIZE,'bold'),cursor='hand2',
-                         highlightbackground=BORDER,highlightthickness=(0 if primary else 1))
+        return RoundedButton(parent,text=text,command=command,fill=(BLUE if primary else WHITE),fg=(WHITE if primary else NAVY),
+                             hover_fill=(BLUE_DARK if primary else '#edf3f8'),outline=(BLUE if primary else BORDER),height=38)
 
     def _build_home(self):
         top=tk.Frame(self.tab_home,bg=BG);top.pack(fill='x',pady=(1,6))
@@ -287,8 +370,8 @@ class SendaDesktop(tk.Tk):
         self.kpi_frame=tk.Frame(self.tab_home,bg=BG);self.kpi_frame.pack(fill='x',pady=(0,7))
         self.kpi_cards={}
         specs=[('movimientos','MOVIMIENTOS',BLUE),('folios','FOLIOS / FINCAS','#2563eb'),
-               ('movimientos_tramite','MOV. CONTROL / GESTIÓN','#7c3aed'),('casos_control','EN CONTROL','#0f766e'),
-               ('casos_gestion','EN GESTIÓN','#0891b2'),('alarmas_rojas','ALARMAS ROJAS',ALARM_RED)]
+               ('tramites_pendientes','TRÁMITES PENDIENTES','#ca8a04'),('movimientos_tramite','MOV. CONTROL / GESTIÓN','#7c3aed'),
+               ('casos_control','EN CONTROL','#0f766e'),('casos_gestion','EN GESTIÓN','#0891b2'),('alarmas_rojas','ALARMAS ROJAS',ALARM_RED)]
         for key,label,accent in specs:
             c=KpiCard(self.kpi_frame,label,accent=accent);c.pack(side='left',fill='x',expand=True,padx=(0,7));self.kpi_cards[key]=c
 
@@ -353,7 +436,7 @@ class SendaDesktop(tk.Tk):
             else:ttk.Entry(dialog,textvariable=var,width=26).grid(row=i,column=1,padx=12,pady=8)
         ttk.Label(dialog,text=f'{len(paths)} archivo(s) seleccionados · XLS / XLSX / CSV / JSON / TXT / ZIP / RAR').grid(row=3,column=0,columnspan=2,padx=12,pady=4)
         ttk.Label(dialog,text='Los archivos y movimientos repetidos se detectan y no se duplican.',foreground=MUTED).grid(row=4,column=0,columnspan=2,padx=12,pady=(0,4))
-        ttk.Button(dialog,text='Importar',command=lambda:self._start_import(dialog,paths,year.get(),quarter.get(),district.get())).grid(row=5,column=0,columnspan=2,pady=12)
+        RoundedButton(dialog,text='Importar',command=lambda:self._start_import(dialog,paths,year.get(),quarter.get(),district.get())).grid(row=5,column=0,columnspan=2,pady=12)
 
     def _start_import(self, dialog, paths, year, quarter, district):
         try:y=int(year)
@@ -380,28 +463,28 @@ class SendaDesktop(tk.Tk):
     def _build_information(self):
         title=ttk.Frame(self.tab_info);title.pack(fill='x')
         ttk.Label(title,text='Información SENDA',style='Title.TLabel').pack(side='left')
-        ttk.Button(title,text='+ Expediente manual',command=self._new_case_dialog).pack(side='right')
+        RoundedButton(title,text='+ Expediente manual',command=self._new_case_dialog).pack(side='right')
         self.info_filters=self._filter_bar(self.tab_info, callback=self._reset_info_page)
         actions=ttk.Frame(self.tab_info);actions.pack(fill='x',pady=(0,6))
         ttk.Label(actions,text='Mostrar').pack(side='left')
         self.info_page_size=tk.StringVar(value='25')
         ttk.Combobox(actions,textvariable=self.info_page_size,values=[str(x) for x in PAGE_SIZES],state='readonly',width=5).pack(side='left',padx=5)
-        ttk.Button(actions,text='Aplicar',command=self._reset_info_page).pack(side='left')
-        ttk.Button(actions,text='Seleccionar visibles',command=self._select_visible_information).pack(side='left',padx=(12,4))
-        ttk.Button(actions,text='Limpiar selección',command=self._clear_information_selection).pack(side='left',padx=4)
+        RoundedButton(actions,text='Aplicar',command=self._reset_info_page).pack(side='left')
+        RoundedButton(actions,text='Seleccionar visibles',command=self._select_visible_information).pack(side='left',padx=(12,4))
+        RoundedButton(actions,text='Limpiar selección',command=self._clear_information_selection).pack(side='left',padx=4)
         self.info_selection_var=tk.StringVar(value='0 seleccionados')
         ttk.Label(actions,textvariable=self.info_selection_var).pack(side='left',padx=10)
-        ttk.Button(actions,text='PASAR A CONTROL',command=self._send_to_control).pack(side='right')
+        RoundedButton(actions,text='PASAR A CONTROL',command=self._send_to_control,fill=BLUE,fg=WHITE,hover_fill=BLUE_DARK,outline=BLUE).pack(side='right')
         cols=[('sel',34),('folio',120),('plano',130),('distrito',150),('estado',110),('mov',70),('der',60),('alarma',80),('primero',90),('ultimo',90)]
         self.info_tree=self._tree(self.tab_info,cols,headings=('','Folio/Finca','Plano','Distrito','Estado','Mov.','Der.','Alarma','Primero','Último'))
         self.info_tree.bind('<Double-1>',self._info_double_click)
         self.info_tree.bind('<space>',self._toggle_information_selection)
         nav=ttk.Frame(self.tab_info);nav.pack(fill='x',pady=6)
         self.info_page_label=tk.StringVar(value='Página 1')
-        ttk.Button(nav,text='‹ Anterior',command=lambda:self._move_info_page(-1)).pack(side='left')
+        RoundedButton(nav,text='‹ Anterior',command=lambda:self._move_info_page(-1)).pack(side='left')
         ttk.Label(nav,textvariable=self.info_page_label).pack(side='left',padx=12)
-        ttk.Button(nav,text='Siguiente ›',command=lambda:self._move_info_page(1)).pack(side='left')
-        ttk.Button(nav,text='Ver movimientos del folio',command=self._open_selected_entity).pack(side='right')
+        RoundedButton(nav,text='Siguiente ›',command=lambda:self._move_info_page(1)).pack(side='left')
+        RoundedButton(nav,text='Ver movimientos del folio',command=self._open_selected_entity).pack(side='right')
 
     def _reset_info_page(self):self._info_offset=0;self.refresh_information()
     def _move_info_page(self,d):
@@ -411,11 +494,15 @@ class SendaDesktop(tk.Tk):
         self._refresh_years(self.info_filters);size=int(self.info_page_size.get())
         data=self.ctx.repo.list_information(self._filters(self.info_filters),limit=size,offset=self._info_offset)
         self._info_rows={}
-        rows=[]
+        rows=[]; tags=[]
         for r in data['rows']:
-            key=r['entity_key'];self._info_rows[key]=r;checked='☑' if key in self._selected_information else '☐'
-            rows.append((checked,r['folio'],r['plano'],r['distrito'],r['status'],r['movimientos'],r['derechos'],r['alarma'],r['first_date'] or '',r['last_date'] or ''))
-        self._replace_tree(self.info_tree,rows,ids=list(self._info_rows.keys()))
+            key=r['entity_key'];self._info_rows[key]=r
+            values, tag = information_alarm_row(r, checked=(key in self._selected_information))
+            rows.append(values); tags.append(tag)
+        self.info_tree.tag_configure('alarm_red', background=alarm_visual('red')['background'], foreground=alarm_visual('red')['foreground'])
+        self.info_tree.tag_configure('alarm_yellow', background=alarm_visual('yellow')['background'], foreground=alarm_visual('yellow')['foreground'])
+        self.info_tree.tag_configure('alarm_green', background=alarm_visual('green')['background'], foreground=alarm_visual('green')['foreground'])
+        self._replace_tree(self.info_tree,rows,ids=list(self._info_rows.keys()),tags=tags)
         total=data['total'];page=(self._info_offset//size)+1;pages=max(1,(total+size-1)//size)
         if self._info_offset>=total and total:self._info_offset=max(0,(pages-1)*size);return self.refresh_information()
         self.info_page_label.set(f'Página {page} de {pages} · {total} expedientes/folios')
@@ -456,19 +543,19 @@ class SendaDesktop(tk.Tk):
         ttk.Label(self.tab_control,text='Control',style='Title.TLabel').pack(anchor='w')
         body=ttk.Panedwindow(self.tab_control,orient='horizontal');body.pack(fill='both',expand=True,pady=6)
         left=ttk.Frame(body);right=ttk.Frame(body);body.add(left,weight=1);body.add(right,weight=3)
-        searchbar=ttk.Frame(left);searchbar.pack(fill='x',pady=(0,6));self.control_search=tk.StringVar();ttk.Entry(searchbar,textvariable=self.control_search).pack(side='left',fill='x',expand=True);ttk.Button(searchbar,text='Buscar',command=self.refresh_control).pack(side='left',padx=4)
+        searchbar=ttk.Frame(left);searchbar.pack(fill='x',pady=(0,6));self.control_search=tk.StringVar();ttk.Entry(searchbar,textvariable=self.control_search).pack(side='left',fill='x',expand=True);RoundedButton(searchbar,text='Buscar',command=self.refresh_control).pack(side='left',padx=4)
         self.control_tree=self._tree(left,[('folio',115),('plano',120),('responsable',100),('prioridad',70)],headings=('Folio','Plano','Responsable','Prioridad'))
         self.control_tree.bind('<<TreeviewSelect>>',lambda e:self._load_control_case())
-        top=ttk.Frame(right);top.pack(fill='x');self.control_title=tk.StringVar(value='Seleccione un trámite');ttk.Label(top,textvariable=self.control_title,font=('Segoe UI',13,'bold')).pack(side='left')
-        self.finalize_btn=ttk.Button(top,text='FINALIZAR',command=self._finalize_active_case,state='disabled');self.finalize_btn.pack(side='right')
-        ttk.Button(top,text='Editar expediente',command=lambda:self._case_editor(self._active_control_id)).pack(side='right',padx=5)
+        top=ttk.Frame(right);top.pack(fill='x');self.control_title=tk.StringVar(value='Seleccione un trámite');ttk.Label(top,textvariable=self.control_title,font=('Segoe UI',16,'bold')).pack(side='left')
+        self.finalize_btn=RoundedButton(top,text='FINALIZAR',command=self._finalize_active_case,state='disabled',fill=BLUE,fg=WHITE,hover_fill=BLUE_DARK,outline=BLUE);self.finalize_btn.pack(side='right')
+        RoundedButton(top,text='Editar expediente',command=lambda:self._case_editor(self._active_control_id)).pack(side='right',padx=5)
         self.control_summary=tk.Text(right,height=7,bg=WHITE,relief='solid',borderwidth=1,font=('Segoe UI',BODY_FONT_SIZE));self.control_summary.pack(fill='x',pady=6)
         catbar=ttk.Frame(right);catbar.pack(fill='x');self.control_category=tk.StringVar(value='TODOS')
         ttk.Label(catbar,text='MOVIMIENTOS').pack(side='left',padx=(0,6))
         for cat in MOVEMENT_CATEGORIES:
             ttk.Radiobutton(catbar,text=cat,variable=self.control_category,value=cat,command=self._refresh_control_movements).pack(side='left',padx=2)
         self.control_mov_tree=self._tree(right,[('fecha',90),('derecho',100),('categoria',110),('operacion',310),('plano',120)],headings=('Fecha','Derecho','Movimiento','Operación','Plano'))
-        self.control_page_var=tk.StringVar(value='25');nav=ttk.Frame(right);nav.pack(fill='x',pady=4);ttk.Label(nav,text='Mostrar').pack(side='left');ttk.Combobox(nav,textvariable=self.control_page_var,values=['25','50','100'],state='readonly',width=5).pack(side='left',padx=4);ttk.Button(nav,text='Aplicar',command=self._reset_control_mov_page).pack(side='left')
+        self.control_page_var=tk.StringVar(value='25');nav=ttk.Frame(right);nav.pack(fill='x',pady=4);ttk.Label(nav,text='Mostrar').pack(side='left');ttk.Combobox(nav,textvariable=self.control_page_var,values=['25','50','100'],state='readonly',width=5).pack(side='left',padx=4);RoundedButton(nav,text='Aplicar',command=self._reset_control_mov_page).pack(side='left')
         self.control_mov_label=tk.StringVar();ttk.Label(nav,textvariable=self.control_mov_label).pack(side='right')
 
     def refresh_control(self):
@@ -501,12 +588,36 @@ class SendaDesktop(tk.Tk):
 
     # -------------------- GESTIÓN --------------------
     def _build_management(self):
-        top=ttk.Frame(self.tab_management);top.pack(fill='x');ttk.Label(top,text='Gestión',style='Title.TLabel').pack(side='left');self.management_search=tk.StringVar();ttk.Entry(top,textvariable=self.management_search,width=25).pack(side='right');ttk.Button(top,text='Buscar',command=self.refresh_management).pack(side='right',padx=4)
+        top=ttk.Frame(self.tab_management);top.pack(fill='x')
+        ttk.Label(top,text='Gestión',style='Title.TLabel').pack(side='left')
+        self.management_search=tk.StringVar();ttk.Entry(top,textvariable=self.management_search,width=25).pack(side='right')
+        RoundedButton(top,text='Buscar',command=self.refresh_management).pack(side='right',padx=4)
+        RoundedButton(top,text='EXPORTAR BASE JSON',command=lambda:self._export_sync_database('json')).pack(side='right',padx=4)
+        RoundedButton(top,text='EXPORTAR BASE EXCEL',command=lambda:self._export_sync_database('xlsx'),fill=BLUE,fg=WHITE,hover_fill=BLUE_DARK,outline=BLUE).pack(side='right',padx=4)
+
+        stats=self._panel(self.tab_management,'Trámites realizados por mes');stats.pack(fill='x',pady=(8,7))
+        statbody=tk.Frame(stats,bg=WHITE);statbody.pack(fill='x',padx=10,pady=(2,9))
+        self.management_total_var=tk.StringVar(value='0 trámites realizados')
+        tk.Label(statbody,textvariable=self.management_total_var,bg=WHITE,fg=NAVY,font=('Segoe UI',PANEL_TITLE_SIZE,'bold')).pack(side='left',padx=(0,16))
+        self.management_chart=MonthlyLineChart(statbody,height=155,width=720);self.management_chart.pack(side='left',fill='x',expand=True)
+        self.management_district_var=tk.StringVar(value='')
+        tk.Label(statbody,textvariable=self.management_district_var,bg=WHITE,fg=MUTED,justify='left',anchor='w',font=('Segoe UI',SMALL_FONT_SIZE)).pack(side='right',padx=(16,0))
+
         self.management_tree=self._tree(self.tab_management,[('folio',125),('plano',130),('distrito',160),('responsable',120),('finalizado',150),('nota',300)],headings=('Folio','Plano','Distrito','Responsable','Finalizado Control','Observaciones'))
-        actions=ttk.Frame(self.tab_management);actions.pack(fill='x',pady=6);ttk.Button(actions,text='Ver movimientos',command=self._management_view).pack(side='left');ttk.Button(actions,text='Editar expediente',command=self._management_edit).pack(side='left',padx=4);ttk.Button(actions,text='Regresar a Información SENDA',command=self._management_return).pack(side='right')
+        actions=ttk.Frame(self.tab_management);actions.pack(fill='x',pady=6);RoundedButton(actions,text='Ver movimientos',command=self._management_view).pack(side='left');RoundedButton(actions,text='Editar expediente',command=self._management_edit).pack(side='left',padx=4);RoundedButton(actions,text='Regresar a Información SENDA',command=self._management_return).pack(side='right')
     def refresh_management(self):
         rows=self.ctx.repo.list_management(self.management_search.get());self._management_rows={str(r['id']):r for r in rows}
         self._replace_tree(self.management_tree,[(r['folio'],r['plano'],r['distrito'],r['responsable'],r['finalized_at'] or '',r['note'] or '') for r in rows],ids=list(self._management_rows.keys()))
+        stats=self.ctx.repo.management_statistics();self.management_chart.set_data(stats.get('por_mes',{}));self.management_total_var.set(f"{stats.get('total',0):,} trámites realizados".replace(',','.'))
+        dlines=[f"{k}: {v:,}".replace(',','.') for k,v in list(stats.get('por_distrito',{}).items())[:5]];self.management_district_var.set('\n'.join(dlines))
+    def _export_sync_database(self,fmt):
+        ext='.xlsx' if fmt=='xlsx' else '.json';label='Excel' if fmt=='xlsx' else 'JSON'
+        path=filedialog.asksaveasfilename(title=f'Exportar Base SENDA · {label}',defaultextension=ext,filetypes=[(label,'*'+ext)])
+        if not path:return
+        def work():
+            try:self._jobs.put(('export_done',str(export_sync_database(self.ctx,fmt,path))))
+            except Exception as exc:self._jobs.put(('error',f'Exportación de Base SENDA: {exc}\n\n{traceback.format_exc()}'))
+        self.status_var.set('Generando Base SENDA fusionable...');threading.Thread(target=work,daemon=True).start()
     def _management_current(self):return self._management_rows.get(self.management_tree.focus())
     def _management_view(self):
         r=self._management_current();
@@ -538,7 +649,7 @@ class SendaDesktop(tk.Tk):
                 else:self.ctx.repo.create_case(payload['folio'],payload['distrito'],payload['note'],plano=payload['plano'],responsable=payload['responsable'],prioridad=payload['prioridad'])
             except Exception as exc:return messagebox.showerror('SENDA',str(exc),parent=d)
             d.destroy();self.refresh_all()
-        ttk.Button(d,text='Guardar expediente',command=save).grid(row=6,column=0,columnspan=2,pady=14)
+        RoundedButton(d,text='Guardar expediente',command=save).grid(row=6,column=0,columnspan=2,pady=14)
 
     def _show_movements_dialog(self,folio,plano,title):
         d=tk.Toplevel(self);d.title(title);d.geometry('1160x650');d.transient(self)
@@ -550,7 +661,7 @@ class SendaDesktop(tk.Tk):
         def refresh():
             data=self.ctx.repo.entity_movements(folio,plano,category.get(),int(page_size.get()),offset['v']);self._replace_tree(tree,[(r['fecha'],r['derecho'] or 'GENERAL',r['categoria'],r['codigo'],r['operacion'],r['plano']) for r in data['rows']]);label.set(f"{data['total']} movimientos · más antiguo → más reciente")
         def move(delta):offset['v']=max(0,offset['v']+delta*int(page_size.get()));refresh()
-        ttk.Button(nav,text='‹ Anterior',command=lambda:move(-1)).pack(side='left',padx=4);ttk.Button(nav,text='Siguiente ›',command=lambda:move(1)).pack(side='left');ttk.Button(nav,text='Aplicar',command=lambda:(offset.update(v=0),refresh())).pack(side='left',padx=4)
+        RoundedButton(nav,text='‹ Anterior',command=lambda:move(-1)).pack(side='left',padx=4);RoundedButton(nav,text='Siguiente ›',command=lambda:move(1)).pack(side='left');RoundedButton(nav,text='Aplicar',command=lambda:(offset.update(v=0),refresh())).pack(side='left',padx=4)
         for w in bar.winfo_children():
             try:w.configure(command=lambda:(offset.update(v=0),refresh()))
             except Exception:pass
@@ -564,9 +675,10 @@ class SendaDesktop(tk.Tk):
         vs=ttk.Scrollbar(wrap,orient='vertical',command=tree.yview);hs=ttk.Scrollbar(wrap,orient='horizontal',command=tree.xview);tree.configure(yscrollcommand=vs.set,xscrollcommand=hs.set)
         tree.grid(row=0,column=0,sticky='nsew');vs.grid(row=0,column=1,sticky='ns');hs.grid(row=1,column=0,sticky='ew');wrap.rowconfigure(0,weight=1);wrap.columnconfigure(0,weight=1)
         return tree
-    def _replace_tree(self,tree,rows,ids=None):
+    def _replace_tree(self,tree,rows,ids=None,tags=None):
         tree.delete(*tree.get_children())
-        for i,row in enumerate(rows):tree.insert('', 'end', iid=(ids[i] if ids else None), values=row)
+        for i,row in enumerate(rows):
+            tree.insert('', 'end', iid=(ids[i] if ids else None), values=row, tags=((tags[i],) if tags else ()))
     def refresh_current_tab(self):
         tab=self.notebook.select()
         if tab==str(self.tab_home):self.refresh_home()

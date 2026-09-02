@@ -4,6 +4,7 @@ $Api = 'https://api.github.com/repos/krisanthco-stack/SENDA-V0/releases/latest'
 $TempRoot = Join-Path $env:TEMP ("SENDA_V0_GITHUB_" + [Guid]::NewGuid().ToString('N'))
 $ZipPath = Join-Path $TempRoot 'SENDA.V0_WINDOWS_DESKTOP.zip'
 $ExtractRoot = Join-Path $TempRoot 'extract'
+$DataRoot = Join-Path $env:LOCALAPPDATA 'SENDA.V0'
 
 Write-Host 'SENDA.V0 - INSTALAR DESDE GITHUB' -ForegroundColor Cyan
 Write-Host 'Descargando la ultima version publicada...' -ForegroundColor Cyan
@@ -28,7 +29,10 @@ if (-not $installer) {
 }
 
 Write-Host "Release: $($release.tag_name)" -ForegroundColor Green
-Write-Host 'Los datos existentes en %LOCALAPPDATA%\SENDA.V0 se conservan.' -ForegroundColor Green
+Write-Host "Datos protegidos: $DataRoot" -ForegroundColor Green
+Write-Host 'Cerrando SENDA.V0 para reemplazar únicamente los archivos del programa...' -ForegroundColor Cyan
+Get-Process -Name 'SENDA.V0' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+Start-Sleep -Milliseconds 900
 & $installer.FullName
 if ($LASTEXITCODE -ne 0) {
     throw "El instalador devolvio el codigo $LASTEXITCODE."

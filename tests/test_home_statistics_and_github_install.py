@@ -47,15 +47,15 @@ def test_workflow_publishes_installable_release():
     text = (ROOT / '.github' / 'workflows' / 'build-windows-desktop.yml').read_text(encoding='utf-8').lower()
     assert 'contents: write' in text
     assert 'gh release' in text
-    assert 'senda.v0_0.4.1_windows_desktop.zip' in text
+    assert 'asset = "senda.v0_${version}_windows_desktop.zip"' in text
 
 
 def test_desktop_typography_has_clear_hierarchy():
     text = (ROOT / 'app' / 'desktop.py').read_text(encoding='utf-8')
-    assert "BODY_FONT_SIZE = 10" in text
-    assert "PANEL_TITLE_SIZE = 12" in text
-    assert "SECTION_TITLE_SIZE = 19" in text
-    assert "NAV_FONT_SIZE = 11" in text
-    assert "KPI_VALUE_SIZE = 20" in text
+    assert "BODY_FONT_SIZE = 12" in text
+    assert "PANEL_TITLE_SIZE = 14" in text
+    assert "SECTION_TITLE_SIZE = 23" in text
+    assert "NAV_FONT_SIZE = 13" in text
+    assert "KPI_VALUE_SIZE = 24" in text
     assert "font=('Segoe UI',PANEL_TITLE_SIZE,'bold')" in text
     assert "style.theme_use('clam')" in text

@@ -324,11 +324,14 @@ class Repository:
                 FROM selected ORDER BY CASE WHEN fecha='' THEN 1 ELSE 0 END,fecha DESC,id DESC LIMIT 12''',params)]
             tramite=c.execute(cte+'''SELECT COUNT(*) n FROM selected s WHERE EXISTS(
                 SELECT 1 FROM case_files cf WHERE cf.status IN ('EN CONTROL','GESTION') AND ((cf.folio<>'' AND cf.folio=s.folio) OR (cf.folio='' AND cf.plano<>'' AND cf.plano=s.plano)))''',params).fetchone()['n']
+            pendientes=c.execute(cte+'''SELECT COUNT(DISTINCT COALESCE(NULLIF(s.folio,''),'@'||NULLIF(s.plano,''))) n
+                FROM selected s WHERE COALESCE(NULLIF(s.folio,''),NULLIF(s.plano,'')) IS NOT NULL AND NOT EXISTS(
+                SELECT 1 FROM case_files cf WHERE cf.status IN ('EN CONTROL','GESTION') AND ((cf.folio<>'' AND cf.folio=s.folio) OR (cf.folio='' AND cf.plano<>'' AND cf.plano=s.plano)))''',params).fetchone()['n']
             cases={r['status']:r['n'] for r in c.execute("SELECT status,COUNT(*) n FROM case_files GROUP BY status")}
             alarm_sql=cte+'''SELECT CASE WHEN latest_date IS NULL OR latest_date>=? THEN 'green' WHEN latest_date<=? THEN 'red' ELSE 'yellow' END level,COUNT(DISTINCT COALESCE(NULLIF(folio,''),'@'||NULLIF(plano,''))) n FROM selected GROUP BY level'''
             alarms={'red':0,'yellow':0,'green':0}
             for r in c.execute(alarm_sql,(*params,cut60,cut90)):alarms[r['level']]=r['n']
-        return {'movimientos':summary['movimientos'],'folios':summary['folios'],'movimientos_tramite':tramite,'casos_control':cases.get('EN CONTROL',0),'casos_gestion':cases.get('GESTION',0),'alarmas':alarms,'por_fuente':by_source,'por_distrito':by_district,'por_categoria':by_category,'por_mes':by_month,'recientes':recent}
+        return {'movimientos':summary['movimientos'],'folios':summary['folios'],'movimientos_tramite':tramite,'tramites_pendientes':pendientes,'casos_control':cases.get('EN CONTROL',0),'casos_gestion':cases.get('GESTION',0),'alarmas':alarms,'por_fuente':by_source,'por_distrito':by_district,'por_categoria':by_category,'por_mes':by_month,'recientes':recent}
 
     # ---------- catalogs ----------
     def upsert_catalog(self,kind,code,class_code,description,source_file=''):
@@ -337,6 +340,80 @@ class Repository:
         with self.connection() as c:return [dict(r) for r in c.execute('SELECT * FROM catalogs ORDER BY kind,code,class_code')]
     def list_imports(self,limit=100):
         with self.connection() as c:return [dict(r) for r in c.execute('SELECT * FROM imports ORDER BY id DESC LIMIT ?',(int(limit),))]
+
+    # ---------- portable SENDA transfer ----------
+    def export_case_rows(self):
+        with self.connection() as c:
+            return [dict(r) for r in c.execute('SELECT * FROM case_files ORDER BY id ASC')]
+
+    def export_audit_rows(self):
+        with self.connection() as c:
+            return [dict(r) for r in c.execute('''SELECT cf.folio,cf.plano,ca.action,ca.previous_status,ca.new_status,
+                ca.note,ca.payload_json,ca.created_at FROM case_audit ca
+                JOIN case_files cf ON cf.id=ca.case_id ORDER BY ca.id ASC''')]
+
+    def merge_sync_payload(self,payload:dict,source_name='SENDA_TRANSFER'):
+        if str(payload.get('formato',''))!='SENDA_TRANSFER':raise ValueError('Formato SENDA de intercambio inválido')
+        movements=payload.get('movimientos') or [];cases=payload.get('expedientes') or [];audits=payload.get('auditoria') or []
+        inserted=duplicates=cases_inserted=cases_updated=cases_older=audits_inserted=audits_duplicates=0
+        with self.connection() as c:
+            cur=c.execute("INSERT INTO imports(anio,trimestre,distrito,source_name,source_hash,status) VALUES(NULL,NULL,'SIN IDENTIFICAR',?,'','PROCESSING')",(_clean(source_name),));import_id=cur.lastrowid
+            sql='''INSERT OR IGNORE INTO movements(folio,derecho,plano,fecha,codigo,operacion,tipo,fuente,categoria,cedula,titular,anio,mes,trimestre,distrito,archivo_origen,import_id,raw_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)'''
+            for r in movements:
+                d=parse_date(r.get('fecha'));year=int(r.get('anio') or (d.year if d else date.today().year));month=int(r.get('mes') or (d.month if d else 0) or 0);q=str(r.get('trimestre') or (quarter_for_month(month) if month else ''))
+                op=_clean(r.get('operacion'));src=_clean(r.get('fuente') or r.get('tipo'));cat=_clean(r.get('categoria')) or movement_category(op,src)
+                folio=_clean(r.get('folio'));derecho=_clean(r.get('derecho'));plano=_clean(r.get('plano'));fecha=d.isoformat() if d else '';codigo=_clean(r.get('codigo'));cedula=_clean(r.get('cedula'));titular=_clean(r.get('titular'))
+                signature=_movement_signature((folio,derecho,plano,fecha,codigo,op,src,cedula,titular))
+                before=c.total_changes;c.execute('INSERT OR IGNORE INTO movement_signatures(signature) VALUES(?)',(signature,))
+                if c.total_changes==before:duplicates+=1;continue
+                vals=(folio,derecho,plano,fecha,codigo,op,_clean(r.get('tipo')),src,cat,cedula,titular,year,month,q,normalize_district(r.get('distrito')),_clean(r.get('archivo_origen') or source_name),import_id,json.dumps(r,ensure_ascii=False,default=str))
+                curm=c.execute(sql,vals)
+                if curm.rowcount:
+                    inserted+=1;c.execute('UPDATE movement_signatures SET movement_id=? WHERE signature=?',(curm.lastrowid,signature))
+                else:
+                    c.execute('DELETE FROM movement_signatures WHERE signature=? AND movement_id IS NULL',(signature,));duplicates+=1
+
+            allowed=('folio','plano','distrito','status','responsable','prioridad','note','control_started_at','finalized_at','management_started_at','created_at','updated_at')
+            for inc in cases:
+                folio=_clean(inc.get('folio'));plano=_clean(inc.get('plano'))
+                if not folio and not plano:continue
+                existing=self._find_case(c,folio,plano)
+                normalized={
+                    'folio':folio,'plano':plano,'distrito':normalize_district(inc.get('distrito')),
+                    'status':_canonical_status(inc.get('status')),'responsable':_clean(inc.get('responsable')),
+                    'prioridad':_clean(inc.get('prioridad')).upper() or 'NORMAL','note':_clean(inc.get('note')),
+                    'control_started_at':_clean(inc.get('control_started_at')) or None,'finalized_at':_clean(inc.get('finalized_at')) or None,
+                    'management_started_at':_clean(inc.get('management_started_at')) or None,
+                    'created_at':_clean(inc.get('created_at')) or None,'updated_at':_clean(inc.get('updated_at')) or None,
+                }
+                if not existing:
+                    c.execute('''INSERT INTO case_files(folio,plano,distrito,status,responsable,prioridad,note,control_started_at,finalized_at,management_started_at,created_at,updated_at)
+                        VALUES(?,?,?,?,?,?,?,?,?,?,COALESCE(?,CURRENT_TIMESTAMP),COALESCE(?,CURRENT_TIMESTAMP))''',tuple(normalized[k] for k in allowed))
+                    cases_inserted+=1;continue
+                incoming_ts=normalized['updated_at'] or '';local_ts=_clean(existing.get('updated_at'))
+                if incoming_ts and local_ts and incoming_ts<local_ts:
+                    cases_older+=1;continue
+                compare=('folio','plano','distrito','status','responsable','prioridad','note','control_started_at','finalized_at','management_started_at')
+                changed=any((_clean(existing.get(k)) if k!='status' else _canonical_status(existing.get(k))) != (_clean(normalized.get(k)) if k!='status' else normalized['status']) for k in compare)
+                if not changed:continue
+                previous=existing['status'];c.execute('''UPDATE case_files SET folio=?,plano=?,distrito=?,status=?,responsable=?,prioridad=?,note=?,control_started_at=?,finalized_at=?,management_started_at=?,updated_at=COALESCE(?,updated_at) WHERE id=?''',
+                    (normalized['folio'],normalized['plano'],normalized['distrito'],normalized['status'],normalized['responsable'],normalized['prioridad'],normalized['note'],normalized['control_started_at'],normalized['finalized_at'],normalized['management_started_at'],normalized['updated_at'],existing['id']))
+                self._audit(c,existing['id'],'SINCRONIZAR DESDE ARCHIVO',previous,normalized['status'],'',{ 'source':source_name })
+                cases_updated+=1
+
+            for a in audits:
+                folio=_clean(a.get('folio'));plano=_clean(a.get('plano'));case=self._find_case(c,folio,plano)
+                if not case:continue
+                action=_clean(a.get('action'));prev=_clean(a.get('previous_status'));new=_clean(a.get('new_status'));note=_clean(a.get('note'));created=_clean(a.get('created_at'))
+                payload_json=a.get('payload_json')
+                if isinstance(payload_json,(dict,list)):payload_json=json.dumps(payload_json,ensure_ascii=False,sort_keys=True,default=str)
+                payload_json=_clean(payload_json) or '{}'
+                exists=c.execute('''SELECT 1 FROM case_audit WHERE case_id=? AND action=? AND COALESCE(previous_status,'')=? AND COALESCE(new_status,'')=? AND COALESCE(note,'')=? AND COALESCE(payload_json,'')=? AND COALESCE(created_at,'')=? LIMIT 1''',
+                    (case['id'],action,prev,new,note,payload_json,created)).fetchone()
+                if exists:audits_duplicates+=1;continue
+                c.execute('''INSERT INTO case_audit(case_id,action,previous_status,new_status,note,payload_json,created_at) VALUES(?,?,?,?,?,?,COALESCE(?,CURRENT_TIMESTAMP))''',(case['id'],action,prev,new,note,payload_json,created or None));audits_inserted+=1
+            c.execute("UPDATE imports SET records=?,skipped=?,errors=0,status='COMPLETED' WHERE id=?",(inserted,duplicates,import_id))
+        return {'import_id':import_id,'movements_inserted':inserted,'movements_duplicates':duplicates,'cases_inserted':cases_inserted,'cases_updated':cases_updated,'cases_older_skipped':cases_older,'audits_inserted':audits_inserted,'audits_duplicates':audits_duplicates}
 
     # ---------- cases / workflow ----------
     def _find_case(self,c,folio='',plano=''):
@@ -408,6 +485,25 @@ class Repository:
 
     def list_control(self,search='',limit=500):return self.list_cases(search,limit,'EN CONTROL')
     def list_management(self,search='',limit=500):return self.list_cases(search,limit,'GESTION')
+
+    def management_statistics(self,filters=None):
+        filters=filters or {};clauses=["status='GESTION'","finalized_at IS NOT NULL"];args=[]
+        year=filters.get('year');month=filters.get('month');quarter=filters.get('quarter');district=filters.get('district')
+        if year not in (None,'','TODOS','ALL'):
+            clauses.append("CAST(strftime('%Y',finalized_at) AS INTEGER)=?");args.append(int(year))
+        if month not in (None,'','TODOS','ALL'):
+            clauses.append("CAST(strftime('%m',finalized_at) AS INTEGER)=?");args.append(int(month))
+        if quarter not in (None,'','TODOS','ALL'):
+            qmap={'T1':(1,3),'T2':(4,6),'T3':(7,9),'T4':(10,12)};lo,hi=qmap[str(quarter).upper()]
+            clauses.append("CAST(strftime('%m',finalized_at) AS INTEGER) BETWEEN ? AND ?");args.extend([lo,hi])
+        if district not in (None,'','TODOS','TODAS','ALL'):
+            clauses.append('distrito=?');args.append(normalize_district(district))
+        where=' WHERE '+' AND '.join(clauses)
+        with self.connection() as c:
+            total=c.execute('SELECT COUNT(*) n FROM case_files'+where,args).fetchone()['n']
+            by_month={int(r['m']):r['n'] for r in c.execute("SELECT CAST(strftime('%m',finalized_at) AS INTEGER) m,COUNT(*) n FROM case_files"+where+" GROUP BY m ORDER BY m",args)}
+            by_district={r['distrito']:r['n'] for r in c.execute('SELECT distrito,COUNT(*) n FROM case_files'+where+' GROUP BY distrito ORDER BY n DESC',args)}
+        return {'total':total,'por_mes':by_month,'por_distrito':by_district}
 
     def _case_movement_where(self,case):
         if case['folio']:return 'folio=?',[case['folio']]
