@@ -1,0 +1,93 @@
+name: Build SENDA.V0 Windows Desktop
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+jobs:
+  build:
+    runs-on: windows-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Restore hidden Pages marker for regression suite
+        shell: pwsh
+        run: |
+          # GitHub web upload can omit dotfiles. This file is not needed by
+          # the desktop EXE, but an existing regression contract checks it.
+          if (-not (Test-Path '.nojekyll')) {
+            New-Item -ItemType File -Path '.nojekyll' -Force | Out-Null
+          }
+
+      - name: Install build dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pyinstaller openpyxl xlsxwriter xlrd pytest
+
+      - name: Run tests
+        shell: pwsh
+        run: |
+          python -m pytest -q
+
+      - name: Bundle 7-Zip for RAR
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force tools/7zip | Out-Null
+          $seven = Join-Path $env:ProgramFiles '7-Zip\7z.exe'
+          $dll = Join-Path $env:ProgramFiles '7-Zip\7z.dll'
+          if (-not (Test-Path $seven) -or -not (Test-Path $dll)) {
+            throw '7-Zip no disponible en el runner Windows'
+          }
+          Copy-Item $seven tools/7zip/7z.exe -Force
+          Copy-Item $dll tools/7zip/7z.dll -Force
+
+      - name: Build standalone EXE
+        shell: pwsh
+        run: |
+          pyinstaller --noconfirm --clean --windowed --name SENDA.V0 --icon assets/senda_v0.ico `
+            --add-data "assets;assets" --add-data "vendor;vendor" --add-data "tools;tools" `
+            --hidden-import openpyxl --hidden-import xlsxwriter --hidden-import xlrd `
+            SENDA_V0_DESKTOP.pyw
+
+      - name: Smoke-test built EXE
+        shell: pwsh
+        run: |
+          $exe = Join-Path $PWD 'dist\SENDA.V0\SENDA.V0.exe'
+          if (-not (Test-Path $exe)) { throw 'No se generó SENDA.V0.exe' }
+          $p = Start-Process -FilePath $exe -ArgumentList '--check' -Wait -PassThru
+          if ($p.ExitCode -ne 0) {
+            throw "SENDA.V0.exe --check falló con código $($p.ExitCode)"
+          }
+
+      - name: Assemble installer folder
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force release | Out-Null
+          Copy-Item -Recurse dist/SENDA.V0 release/SENDA.V0
+          New-Item -ItemType Directory -Force release/SENDA.V0/scripts | Out-Null
+          Copy-Item scripts/install_desktop.ps1 release/SENDA.V0/scripts/
+          Copy-Item scripts/update_desktop.ps1 release/SENDA.V0/scripts/
+          Copy-Item scripts/uninstall_desktop.ps1 release/SENDA.V0/scripts/
+          Copy-Item INSTALAR_SENDA_V0.bat release/SENDA.V0/
+          Copy-Item ACTUALIZAR_SENDA_V0.bat release/SENDA.V0/
+          Copy-Item DESINSTALAR_SENDA_V0.bat release/SENDA.V0/
+          Copy-Item MANTENIMIENTO_SENDA_V0.bat release/SENDA.V0/
+          Compress-Archive -Path release/SENDA.V0/* -DestinationPath SENDA.V0_0.4.0_WINDOWS_DESKTOP.zip -Force
+
+      - name: Upload Windows Desktop artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SENDA.V0-0.4.0-Windows-Desktop
+          path: SENDA.V0_0.4.0_WINDOWS_DESKTOP.zip
+          if-no-files-found: error
