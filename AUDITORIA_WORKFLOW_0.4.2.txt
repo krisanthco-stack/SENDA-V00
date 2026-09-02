@@ -1,0 +1,30 @@
+SENDA.V0 0.4.2 - AUDITORIA DEL WORKFLOW WINDOWS
+Fecha: 2026-09-02
+
+RIESGOS DETECTADOS Y CORREGIDOS
+1. Workflow legado .github/workflows/build-windows.yml generaba 0.3.0 en paralelo.
+   CORRECCION: eliminado; queda solo build-windows-desktop.yml.
+2. Actions anteriores dependían de Node 20.
+   CORRECCION: checkout@v7, setup-python@v7 y upload-artifact@v7.
+3. La versión estaba copiada manualmente en nombres, tag y Release.
+   CORRECCION: se lee una sola vez desde pyproject.toml y se generan metadatos dinámicos.
+4. La comprobación de tag/Release podía devolver código no-cero en una primera publicación.
+   CORRECCION: consultas seguras con git ls-remote y gh release list.
+5. Una Release/tag existente podía mezclar otra revisión del código.
+   CORRECCION: si el tag apunta a otro commit, el workflow aborta explícitamente.
+6. Se podía subir un ZIP incompleto.
+   CORRECCION: se extrae el ZIP, se validan archivos obligatorios y se vuelve a ejecutar SENDA.V0.exe --check antes de publicar.
+7. Dependencias de build sin versión podían cambiar entre ejecuciones.
+   CORRECCION: versiones fijadas en el workflow.
+
+VERIFICACION LOCAL DEL ARBOL EMPAQUETADO
+- 91 pruebas aprobadas, 0 fallos.
+- SENDA.V0 Desktop --check: OK.
+- compileall app: OK.
+- Workflow YAML: válido, 14 pasos.
+- Corte XLS real: 6249 insertados, 1511 omitidos por regla, 646 catálogos, 0 errores.
+- Repetición del mismo corte: 0 nuevos; total sin cambios (6249).
+
+LIMITACION DE ESTA AUDITORIA
+El binario SENDA.V0.exe para Windows no se puede compilar en este entorno Linux.
+La certificación final del EXE, del 7-Zip RAR y de la Release se realiza al ejecutar el workflow en GitHub Actions windows-latest.

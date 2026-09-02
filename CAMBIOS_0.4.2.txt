@@ -1,0 +1,13 @@
+SENDA.V0 0.4.2
+
+- Base SENDA fusionable Excel/JSON para intercambio entre computadoras.
+- Fusiona movimientos, expedientes, estados EN CONTROL/GESTION y auditoría.
+- No reemplaza ni elimina la SQLite local.
+- Protección de conflicto por updated_at: conserva el expediente local si es más reciente.
+- KPI TRÁMITES PENDIENTES en Inicio.
+- Gestión: gráfico de trámites realizados por mes y exportación Base SENDA Excel/JSON.
+- Información SENDA: alarmas visibles por color y texto.
+- Tipografía aumentada ~20% y controles con mayor jerarquía.
+- Botones redondeados mediante Canvas.
+- Se mantiene ↻ ACTUALIZAR DESDE GITHUB.
+- Se mantienen XLS/XLSX/CSV/JSON/TXT/ZIP/RAR y deduplicación.

@@ -1,0 +1,35 @@
+SENDA.V0 0.4.2 - ACTUALIZACION DEL REPOSITORIO GITHUB
+
+IMPORTANTE: esta entrega sustituye el workflow anterior y elimina el workflow legado.
+
+1. Suba/reemplace los archivos del parche respetando exactamente sus carpetas.
+2. En GitHub ELIMINE una sola vez este archivo antiguo si todavía existe:
+   .github/workflows/build-windows.yml
+3. Debe quedar un solo workflow de Windows:
+   .github/workflows/build-windows-desktop.yml
+4. Haga Commit changes en la rama main.
+5. GitHub > Actions > Build SENDA.V0 Windows Desktop > Run workflow > main.
+6. Use una ejecución NUEVA; no use Re-run de un build viejo.
+7. Espere estado verde. El workflow ejecuta pruebas, crea SENDA.V0.exe, ejecuta --check,
+   valida el ZIP y solo después sube el artefacto/publica la Release.
+8. La versión se obtiene automáticamente de pyproject.toml. No edite nombres de versión dentro del workflow.
+9. La Release v0.4.2 publicará SENDA.V0_0.4.2_WINDOWS_DESKTOP.zip.
+10. Para recibir por primera vez el nuevo diseño y las funciones 0.4.2, instale manualmente esa Release.
+11. Después de instalar 0.4.2, use el botón ↻ ACTUALIZAR DESDE GITHUB para futuras versiones.
+
+PROTECCION DEL WORKFLOW
+- Usa actions/checkout@v7, actions/setup-python@v7 y actions/upload-artifact@v7.
+- Las dependencias de compilación están fijadas a versiones concretas.
+- Si el tag v0.4.2 existe y apunta a otro commit, el workflow se detiene en lugar de sobrescribirlo.
+- Si la Release todavía no existe, esa ausencia es tratada como caso normal y no como error.
+- El ZIP se descomprime y se comprueban SENDA.V0.exe, instaladores y actualizador antes de publicar.
+- Se ejecuta SENDA.V0.exe --check tanto antes como después de crear el ZIP.
+
+DATOS
+La actualización no debe borrar %LOCALAPPDATA%\SENDA.V0.
+No elimine esa carpeta durante una actualización.
+
+BASE SENDA FUSIONABLE
+Gestión > EXPORTAR BASE EXCEL / EXPORTAR BASE JSON.
+En otra computadora: CARGAR DATOS > seleccionar el Excel/JSON exportado.
+SENDA fusiona movimientos, expedientes, Control, Gestión y auditoría sin reemplazar la SQLite completa.

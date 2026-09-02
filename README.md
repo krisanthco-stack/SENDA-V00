@@ -1,6 +1,6 @@
-# SENDA.V0 0.4.1 · Escritorio Windows
+# SENDA.V0 0.4.2 · Escritorio Windows
 
-SENDA.V0 0.4.1 abandona el navegador como interfaz de la aplicación instalada. La versión Windows usa una ventana de escritorio nativa (Tk/ttk), accede directamente a SQLite y al motor de importación Python, y no necesita Chrome, Edge, `localhost` ni conexión a Internet para trabajar una vez compilada/instalada.
+SENDA.V0 0.4.2 abandona el navegador como interfaz de la aplicación instalada. La versión Windows usa una ventana de escritorio nativa (Tk/ttk), accede directamente a SQLite y al motor de importación Python, y no necesita Chrome, Edge, `localhost` ni conexión a Internet para trabajar una vez compilada/instalada.
 
 ## Estructura funcional
 
@@ -42,7 +42,7 @@ El usuario final no necesita Python, Chrome ni Edge.
 
 ## Instalar desde GitHub
 
-El workflow publica automáticamente una **Release** con `SENDA.V0_0.4.1_WINDOWS_DESKTOP.zip`. Hay dos rutas:
+El workflow publica automáticamente una **Release** con `SENDA.V0_0.4.2_WINDOWS_DESKTOP.zip`. Hay dos rutas:
 
 1. **Release:** abrir **Releases → Latest**, descargar el ZIP, extraerlo y ejecutar `INSTALAR_SENDA_V0.bat`.
 2. **Desde una copia del repositorio:** ejecutar `INSTALAR_DESDE_GITHUB.bat`; el script consulta la Release más reciente, descarga el paquete oficial y ejecuta el instalador.
@@ -53,7 +53,7 @@ En ambos casos la aplicación se instala en `%LOCALAPPDATA%\Programs\SENDA.V0` y
 
 1. Subir el contenido de este repositorio a GitHub.
 2. Abrir **Actions → Build SENDA.V0 Windows Desktop → Run workflow**.
-3. El workflow ejecuta pruebas, construye `SENDA.V0.exe`, valida `--check`, publica el artefacto y actualiza la Release **v0.4.1**.
+3. El workflow ejecuta pruebas, construye `SENDA.V0.exe`, valida `--check`, publica el artefacto y actualiza la Release **v0.4.2**.
 
 ## Regla anti-duplicados
 
@@ -74,3 +74,16 @@ python -m app.desktop --check --data-dir <carpeta-temporal>
 ```
 
 `--check` valida SQLite y las migraciones sin abrir interfaz ni iniciar servidor HTTP.
+
+
+## SENDA.V0 0.4.2 Desktop
+
+- Inicio agrega **TRÁMITES PENDIENTES** y conserva estadísticas dinámicas.
+- Información SENDA muestra alarmas visibles **🔴 ROJA / 🟡 AMARILLA / 🟢 VERDE**.
+- Gestión incorpora gráfico de **Trámites realizados por mes**.
+- Gestión exporta **Base SENDA fusionable** en Excel o JSON con movimientos, expedientes, estados, fechas y auditoría.
+- `CARGAR DATOS` reconoce una Base SENDA Excel/JSON exportada en otra computadora y fusiona cambios sin borrar la base local.
+- Movimientos repetidos continúan deduplicándose por firma lógica.
+- Tipografía aumentada aproximadamente 20% y acciones principales usan botones redondeados.
+- Se mantiene **↻ ACTUALIZAR DESDE GITHUB** y la persistencia en `%LOCALAPPDATA%\SENDA.V0`.
+- Importadores registrales: XLS, XLSX, CSV, JSON, TXT, ZIP y RAR.

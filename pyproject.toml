@@ -1,6 +1,6 @@
 [project]
 name = "senda-v0"
-version = "0.4.1"
+version = "0.4.2"
 requires-python = ">=3.10"
 description = "SENDA.V0 local registry workflow"
 
