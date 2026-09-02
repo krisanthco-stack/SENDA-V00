@@ -1,0 +1,32 @@
+SENDA.V0 0.4.0 DESKTOP
+======================
+Arquitectura Windows: ventana nativa Tk/ttk, acceso directo a SQLite; sin Chrome/Edge/localhost.
+Suite: 58/58 pruebas aprobadas.
+Compilación Python: app/desktop.py y app/desktop_model.py OK.
+
+Muestras reales (grupo XLS/CSV/JSON/TXT):
+- Insertados: 6254
+- Omitidos por reglas: 1511
+- Catálogos: 646
+- Errores: 0
+
+RAR real SARAPIQUI(2).rar:
+- Insertados adicionales: 15
+- Errores: 0
+
+Dashboard después de muestras:
+- Movimientos: 6269
+- Folios/entidades: 1768
+- Hipotecas: 770
+- Gravámenes: 1085
+- Segregaciones: 495
+- Anotaciones: 405
+- Históricos: 3402
+- Cerradas: 91
+
+Distritos detectados:
+- Horquetas: 3840
+- La Virgen: 1502
+- Puerto Viejo: 849
+- Cureña: 66
+- Llanuras del Gaspar: 12

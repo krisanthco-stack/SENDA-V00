@@ -1,0 +1,19 @@
+SENDA.V0 0.3.0 - INSTALACION WINDOWS
+
+1. Extraiga TODO el contenido del ZIP a una carpeta normal.
+2. Cierre cualquier SENDA.V0 anterior.
+3. Ejecute INSTALAR_SENDA_V0.bat.
+4. El instalador prepara un runtime privado dentro de SENDA.V0, prueba /api/health y la interfaz /, y solo entonces crea el acceso directo.
+5. Abra SENDA.V0 desde el escritorio.
+
+RUTAS:
+Programa: %LOCALAPPDATA%\Programs\SENDA.V0
+Datos:    %LOCALAPPDATA%\SENDA.V0
+
+ACTUALIZAR:
+Ejecute ACTUALIZAR_SENDA_V0.bat desde el paquete NUEVO. No borra la carpeta de datos.
+
+DESINSTALAR:
+La opción predeterminada conserva los datos. Para borrar datos debe elegir la opción 2 y escribir ELIMINAR.
+
+Si el paquete no contiene runtime\python-3.12.10-embed-<arquitectura>.zip, la primera instalación requiere Internet para descargarlo directamente desde Python.org. Después SENDA usa su runtime privado y no depende de Python instalado en Windows.
