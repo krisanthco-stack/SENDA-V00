@@ -5,11 +5,12 @@ on:
   push:
     tags: ['v*']
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: windows-latest
-    permissions:
-      contents: read
 
     steps:
       - name: Checkout
@@ -23,8 +24,6 @@ jobs:
       - name: Restore hidden Pages marker for regression suite
         shell: pwsh
         run: |
-          # GitHub web upload can omit dotfiles. This file is not needed by
-          # the desktop EXE, but an existing regression contract checks it.
           if (-not (Test-Path '.nojekyll')) {
             New-Item -ItemType File -Path '.nojekyll' -Force | Out-Null
           }
@@ -83,11 +82,26 @@ jobs:
           Copy-Item ACTUALIZAR_SENDA_V0.bat release/SENDA.V0/
           Copy-Item DESINSTALAR_SENDA_V0.bat release/SENDA.V0/
           Copy-Item MANTENIMIENTO_SENDA_V0.bat release/SENDA.V0/
-          Compress-Archive -Path release/SENDA.V0/* -DestinationPath SENDA.V0_0.4.0_WINDOWS_DESKTOP.zip -Force
+          Compress-Archive -Path release/SENDA.V0/* -DestinationPath SENDA.V0_0.4.1_WINDOWS_DESKTOP.zip -Force
 
       - name: Upload Windows Desktop artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SENDA.V0-0.4.0-Windows-Desktop
-          path: SENDA.V0_0.4.0_WINDOWS_DESKTOP.zip
+          name: SENDA.V0-0.4.1-Windows-Desktop
+          path: SENDA.V0_0.4.1_WINDOWS_DESKTOP.zip
           if-no-files-found: error
+
+      - name: Publish installable GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          $tag = 'v0.4.1'
+          $asset = 'SENDA.V0_0.4.1_WINDOWS_DESKTOP.zip'
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $tag $asset --target $env:GITHUB_SHA --title 'SENDA.V0 0.4.1' --notes 'SENDA.V0 Desktop para Windows. Incluye instalación local, XLS/XLSX/CSV/JSON/TXT/ZIP/RAR, estadísticas de Inicio y protección contra cargas duplicadas.' --latest
+          } else {
+            gh release upload $tag $asset --clobber
+            gh release edit $tag --latest
+          }
