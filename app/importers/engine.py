@@ -10,6 +10,7 @@ OLE_MAGIC=bytes.fromhex('D0CF11E0A1B11AE1')
 ZIP_MAGIC=b'PK\x03\x04'
 RAR4_MAGIC=b'Rar!\x1a\x07\x00'
 RAR5_MAGIC=b'Rar!\x1a\x07\x01\x00'
+SUPPORTED_IMPORT_FORMATS=('XLS','XLSX','CSV','JSON','TXT','ZIP','RAR')
 
 SOURCE_NAMES={
  'FINCAS_GENERADAS':'FINCAS GENERADAS','FINCAS':'FINCAS','SEGREGACIONES':'SEGREGACIONES','HISTORICOS':'HISTORICOS',
@@ -295,9 +296,14 @@ def normalize_row(row:dict, *, source:str, year:int, quarter:str, district:str, 
     d=_date(r); row_year=d.year if d else int(year); month=d.month if d else 0; row_quarter=quarter_for_month(month) if month else quarter
     row_district=normalize_district(r.get('DISTRITO') or r.get('NOMBRE_DISTRITO') or district)
     right=ctx['rights'].get(keynorm(r.get('COD_DERECHO')),'') or clean(r.get('TIPO_DERECHO'))
+    # Exact source-row fingerprint. It ignores only the filename/import context,
+    # so a copied row is deduplicated while distinct registry rows are preserved.
+    source_payload=json.dumps({k:clean(v) for k,v in sorted(r.items())},ensure_ascii=False,sort_keys=True,separators=(',',':'))
+    source_signature=hashlib.sha256(('SRC|'+keynorm(source)+'|'+source_payload).encode('utf-8')).hexdigest()
     return {'folio':_folio(r),'derecho':right,'plano':clean(r.get('NUM_PLANO') or r.get('PLANO')),'fecha':d.isoformat() if d else '',
             'codigo':full,'operacion':op,'tipo':source,'fuente':source,'categoria':movement_category(op,source),'cedula':clean(r.get('NUMERO_IDENT') or r.get('CEDULA') or r.get('CEDULAJURIDICA')),
-            'titular':_owner(r),'anio':row_year,'mes':month,'trimestre':row_quarter,'distrito':row_district,'archivo_origen':source_file}
+            'titular':_owner(r),'anio':row_year,'mes':month,'trimestre':row_quarter,'distrito':row_district,'archivo_origen':source_file,
+            '_source_signature':source_signature}
 
 def safe_extract_zip(path:Path, target:Path):
     with zipfile.ZipFile(path) as z:
@@ -423,9 +429,14 @@ class ImportEngine:
         if quarter not in ('T1','T2','T3','T4'):raise ValueError('Trimestre inválido')
         district=normalize_district(district); original=[Path(p) for p in paths]
         if not original:return {'inserted':0,'skipped':0,'errors':0,'files':[],'catalogs':0}
-        combined=hashlib.sha256(''.join(sha256_file(p) for p in original).encode()).hexdigest()
+        # Order and filename independent hash: the same payload selected again is a duplicate import.
+        original_hashes=sorted(sha256_file(p) for p in original)
+        combined=hashlib.sha256(''.join(original_hashes).encode()).hexdigest()
+        if self.repo.has_completed_import_hash(combined):
+            return {'inserted':0,'skipped':0,'duplicates':0,'errors':0,'files':[],
+                    'catalogs':0,'duplicate_import':True,'duplicate_files':[p.name for p in original]}
         import_id=self.repo.create_import(year=year,quarter=quarter,district=district,source_name=', '.join(p.name for p in original),source_hash=combined)
-        skipped=0; errors=0; inserted=0; catalogs_count=0; accepted=[]
+        skipped=0; duplicates=0; errors=0; inserted=0; catalogs_count=0; accepted=[]
         try:
             with ExitStack() as stack:
                 expanded=self._expand(original,stack)
@@ -448,12 +459,14 @@ class ImportEngine:
                                 if x is None:skipped+=1
                                 else:yield x
                         inserted += self.repo.insert_movements(normalized(),import_id)
+                        duplicates += self.repo.last_insert_duplicates
                         accepted.append(p.name)
                     except Exception:
                         errors+=1
                         raise
             self.repo.finish_import(import_id,inserted,skipped,errors,'COMPLETED')
-            return {'import_id':import_id,'inserted':inserted,'skipped':skipped,'errors':errors,'files':accepted,'catalogs':catalogs_count}
+            return {'import_id':import_id,'inserted':inserted,'skipped':skipped,'duplicates':duplicates,'errors':errors,
+                    'files':accepted,'catalogs':catalogs_count,'duplicate_import':False}
         except Exception:
             self.repo.finish_import(import_id,inserted,skipped,errors+1,'FAILED')
             raise

@@ -1,5 +1,5 @@
 from __future__ import annotations
-import json, sqlite3
+import hashlib, json, sqlite3
 from contextlib import contextmanager
 from datetime import date, timedelta
 from pathlib import Path
@@ -31,6 +31,10 @@ CREATE TABLE IF NOT EXISTS imports(
  anio INTEGER, trimestre TEXT, distrito TEXT, source_name TEXT, source_hash TEXT,
  records INTEGER DEFAULT 0, skipped INTEGER DEFAULT 0, errors INTEGER DEFAULT 0, status TEXT DEFAULT 'PROCESSING'
 );
+CREATE INDEX IF NOT EXISTS ix_import_hash_status ON imports(source_hash,status);
+CREATE TABLE IF NOT EXISTS movement_signatures(
+ signature TEXT PRIMARY KEY, movement_id INTEGER, created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
 CREATE TABLE IF NOT EXISTS catalogs(
  kind TEXT NOT NULL, code TEXT NOT NULL, class_code TEXT NOT NULL DEFAULT '', description TEXT,
  source_file TEXT, PRIMARY KEY(kind,code,class_code)
@@ -61,6 +65,16 @@ CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT);
 
 
 def _clean(v): return str(v or '').strip()
+
+
+def _movement_signature(values):
+    """Firma lógica independiente del nombre de archivo/importación.
+
+    Evita que el mismo movimiento vuelva a insertarse si llega en un archivo
+    renombrado, otro ZIP/RAR o una nueva carga del mismo corte.
+    """
+    payload='|'.join(_clean(v).upper() for v in values)
+    return hashlib.sha256(payload.encode('utf-8')).hexdigest()
 
 def _canonical_status(v):
     s=_clean(v).upper().replace('_',' ')
@@ -114,6 +128,13 @@ class Repository:
          FOREIGN KEY(case_id) REFERENCES case_files(id) ON DELETE CASCADE);
         CREATE INDEX IF NOT EXISTS ix_case_audit_case ON case_audit(case_id,id);
         ''')
+        c.executescript('''
+        CREATE INDEX IF NOT EXISTS ix_import_hash_status ON imports(source_hash,status);
+        CREATE TABLE IF NOT EXISTS movement_signatures(
+         signature TEXT PRIMARY KEY,movement_id INTEGER,created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+        ''')
+        # No destructive backfill: existing 0.4.0 rows stay untouched. New 0.4.1
+        # imports populate exact source-row signatures from this point forward.
         # Preserve old cases while translating their workflow state.
         for old,new in (('PENDIENTE','INFORMACION'),('EN REVISION','EN CONTROL'),('FINALIZADO','GESTION'),('REGRESADO','INFORMACION')):
             c.execute('UPDATE case_files SET status=? WHERE UPPER(status)=?',(new,old))
@@ -135,6 +156,11 @@ class Repository:
             WHERE COALESCE(categoria,'')='' ''')
 
     # ---------- imports / movements ----------
+    def has_completed_import_hash(self,source_hash:str) -> bool:
+        if not source_hash:return False
+        with self.connection() as c:
+            return c.execute("SELECT 1 FROM imports WHERE source_hash=? AND status='COMPLETED' LIMIT 1",(source_hash,)).fetchone() is not None
+
     def create_import(self,*,year=None,quarter=None,district='',source_name='',source_hash='')->int:
         with self.connection() as c:
             cur=c.execute('INSERT INTO imports(anio,trimestre,distrito,source_name,source_hash) VALUES(?,?,?,?,?)',(year,quarter,normalize_district(district),source_name,source_hash));return cur.lastrowid
@@ -144,18 +170,34 @@ class Repository:
 
     def insert_movements(self,rows,import_id:int,batch_size:int=1000):
         sql='''INSERT OR IGNORE INTO movements(folio,derecho,plano,fecha,codigo,operacion,tipo,fuente,categoria,cedula,titular,anio,mes,trimestre,distrito,archivo_origen,import_id,raw_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)'''
-        batch=[];inserted=0
+        inserted=0;duplicates=0
         with self.connection() as c:
             for r in rows:
                 d=parse_date(r.get('fecha'));year=int(r.get('anio') or (d.year if d else date.today().year));month=int(r.get('mes') or (d.month if d else 0) or 0);q=str(r.get('trimestre') or (quarter_for_month(month) if month else ''))
                 op=_clean(r.get('operacion'));src=_clean(r.get('fuente') or r.get('tipo'));cat=_clean(r.get('categoria')) or movement_category(op,src)
-                vals=(_clean(r.get('folio')),_clean(r.get('derecho')),_clean(r.get('plano')),d.isoformat() if d else '',_clean(r.get('codigo')),op,_clean(r.get('tipo')),src,cat,_clean(r.get('cedula')),_clean(r.get('titular')),year,month,q,normalize_district(r.get('distrito')),_clean(r.get('archivo_origen')),import_id,json.dumps(r,ensure_ascii=False,default=str))
-                batch.append(vals)
-                if len(batch)>=batch_size:
-                    before=c.total_changes;c.executemany(sql,batch);inserted+=c.total_changes-before;batch.clear()
-            if batch:
-                before=c.total_changes;c.executemany(sql,batch);inserted+=c.total_changes-before
+                folio=_clean(r.get('folio'));derecho=_clean(r.get('derecho'));plano=_clean(r.get('plano'));fecha=d.isoformat() if d else '';codigo=_clean(r.get('codigo'));cedula=_clean(r.get('cedula'));titular=_clean(r.get('titular'))
+                signature=_clean(r.get('_source_signature')) or _movement_signature((folio,derecho,plano,fecha,codigo,op,src,cedula,titular))
+                before=c.total_changes
+                c.execute('INSERT OR IGNORE INTO movement_signatures(signature) VALUES(?)',(signature,))
+                if c.total_changes==before:
+                    duplicates+=1
+                    continue
+                vals=(folio,derecho,plano,fecha,codigo,op,_clean(r.get('tipo')),src,cat,cedula,titular,year,month,q,normalize_district(r.get('distrito')),_clean(r.get('archivo_origen')),import_id,json.dumps(r,ensure_ascii=False,default=str))
+                cur=c.execute(sql,vals)
+                if cur.rowcount:
+                    inserted+=1
+                    c.execute('UPDATE movement_signatures SET movement_id=? WHERE signature=?',(cur.lastrowid,signature))
+                else:
+                    # Defensive rollback of the signature marker if the legacy UNIQUE
+                    # constraint rejected the movement for an unexpected reason.
+                    c.execute('DELETE FROM movement_signatures WHERE signature=? AND movement_id IS NULL',(signature,))
+                    duplicates+=1
+        self._last_insert_duplicates=duplicates
         return inserted
+
+    @property
+    def last_insert_duplicates(self):
+        return int(getattr(self,'_last_insert_duplicates',0))
 
     def _where(self,filters,alias=''):
         filters=filters or {};p=(alias+'.') if alias else '';clauses=[];args=[]
@@ -277,13 +319,16 @@ class Repository:
             by_source={r['fuente']:r['n'] for r in c.execute(cte+'SELECT fuente,COUNT(*) n FROM selected GROUP BY fuente ORDER BY n DESC',params)}
             by_district={r['distrito']:r['n'] for r in c.execute(cte+'SELECT distrito,COUNT(*) n FROM selected GROUP BY distrito ORDER BY n DESC',params)}
             by_category={r['categoria']:r['n'] for r in c.execute(cte+'SELECT categoria,COUNT(*) n FROM selected GROUP BY categoria ORDER BY n DESC',params)}
+            by_month={int(r['mes']):r['n'] for r in c.execute(cte+'SELECT mes,COUNT(*) n FROM selected WHERE mes IS NOT NULL GROUP BY mes ORDER BY mes',params)}
+            recent=[dict(r) for r in c.execute(cte+'''SELECT fecha,folio,plano,categoria,codigo,operacion,distrito
+                FROM selected ORDER BY CASE WHEN fecha='' THEN 1 ELSE 0 END,fecha DESC,id DESC LIMIT 12''',params)]
             tramite=c.execute(cte+'''SELECT COUNT(*) n FROM selected s WHERE EXISTS(
                 SELECT 1 FROM case_files cf WHERE cf.status IN ('EN CONTROL','GESTION') AND ((cf.folio<>'' AND cf.folio=s.folio) OR (cf.folio='' AND cf.plano<>'' AND cf.plano=s.plano)))''',params).fetchone()['n']
             cases={r['status']:r['n'] for r in c.execute("SELECT status,COUNT(*) n FROM case_files GROUP BY status")}
             alarm_sql=cte+'''SELECT CASE WHEN latest_date IS NULL OR latest_date>=? THEN 'green' WHEN latest_date<=? THEN 'red' ELSE 'yellow' END level,COUNT(DISTINCT COALESCE(NULLIF(folio,''),'@'||NULLIF(plano,''))) n FROM selected GROUP BY level'''
             alarms={'red':0,'yellow':0,'green':0}
             for r in c.execute(alarm_sql,(*params,cut60,cut90)):alarms[r['level']]=r['n']
-        return {'movimientos':summary['movimientos'],'folios':summary['folios'],'movimientos_tramite':tramite,'casos_control':cases.get('EN CONTROL',0),'casos_gestion':cases.get('GESTION',0),'alarmas':alarms,'por_fuente':by_source,'por_distrito':by_district,'por_categoria':by_category}
+        return {'movimientos':summary['movimientos'],'folios':summary['folios'],'movimientos_tramite':tramite,'casos_control':cases.get('EN CONTROL',0),'casos_gestion':cases.get('GESTION',0),'alarmas':alarms,'por_fuente':by_source,'por_distrito':by_district,'por_categoria':by_category,'por_mes':by_month,'recientes':recent}
 
     # ---------- catalogs ----------
     def upsert_catalog(self,kind,code,class_code,description,source_file=''):

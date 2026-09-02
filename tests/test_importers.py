@@ -13,6 +13,14 @@ class ImporterTests(unittest.TestCase):
         self.assertEqual(detect_format(p),'delimited')
         self.assertEqual(detect_source(p, ['PROVINCIA','NUMERO','DERECHO']),'FINCAS')
 
+    def test_utf8_bom_does_not_corrupt_first_header(self):
+        p=self.root/'convertido.csv'
+        p.write_text('PROVINCIA;NUMERO;DERECHO\n4;200103;1\n',encoding='utf-8-sig')
+        from app.importers.engine import iter_delimited
+        row=next(iter_delimited(p))
+        self.assertIn('PROVINCIA',row)
+        self.assertEqual(row['PROVINCIA'],'4')
+
     def test_catalog_rules_and_operation_class_are_applied(self):
         (self.root/'CATALOGO_COD_OPERACIONES.TXT').write_text('"PE";1;"COMPRAVENTA"\n',encoding='utf-8')
         (self.root/'CATALOGO_COD_DERECHOS.TXT').write_text('"D";"DOMINIO"\n',encoding='utf-8')
@@ -95,5 +103,55 @@ class ImporterTests(unittest.TestCase):
             self.assertEqual(result['inserted'],1)
         finally:
             eng.iter_rows=original; self.repo.insert_movements=original_insert
+
+    def test_reimporting_same_file_hash_does_not_duplicate(self):
+        p=self.root/'Fincas.csv'
+        p.write_text('PROVINCIA;NUMERO;DERECHO;FECHA_ULT_ACT\n4;901;1;01/03/2026\n',encoding='utf-8')
+        first=self.engine.import_paths([p],year=2026,quarter='T1',district='Horquetas')
+        second=self.engine.import_paths([p],year=2026,quarter='T1',district='Horquetas')
+        self.assertEqual(first['inserted'],1)
+        self.assertEqual(second['inserted'],0)
+        self.assertTrue(second.get('duplicate_import'))
+        self.assertEqual(len(self.repo.list_movements({'district':'HORQUETAS'})),1)
+
+    def test_shared_exact_source_row_is_deduplicated_across_different_files(self):
+        a=self.root/'Fincas_A.csv'
+        b=self.root/'Fincas_B.csv'
+        header='PROVINCIA;NUMERO;DERECHO;FECHA_ULT_ACT;NOTA\n'
+        a.write_text(header+'4;902;1;01/03/2026;MISMA\n',encoding='utf-8')
+        b.write_text(header+'4;902;1;01/03/2026;MISMA\n4;903;1;01/03/2026;NUEVA\n',encoding='utf-8')
+        first=self.engine.import_paths([a],year=2026,quarter='T1',district='Horquetas')
+        second=self.engine.import_paths([b],year=2026,quarter='T1',district='Horquetas')
+        self.assertEqual(first['inserted'],1)
+        self.assertEqual(second['inserted'],1)
+        self.assertGreaterEqual(second.get('duplicates',0),1)
+        self.assertEqual(len(self.repo.list_movements({'district':'HORQUETAS'})),2)
+
+    def test_distinct_source_rows_are_not_collapsed_by_dedupe(self):
+        a=self.root/'Fincas_A.csv'
+        b=self.root/'Fincas_B.csv'
+        a.write_text('PROVINCIA;NUMERO;DERECHO;FECHA_ULT_ACT;NOTA\n4;904;1;01/03/2026;ASIENTO A\n',encoding='utf-8')
+        b.write_text('PROVINCIA;NUMERO;DERECHO;FECHA_ULT_ACT;NOTA\n4;904;1;01/03/2026;ASIENTO B\n',encoding='utf-8')
+        first=self.engine.import_paths([a],year=2026,quarter='T1',district='Horquetas')
+        second=self.engine.import_paths([b],year=2026,quarter='T1',district='Horquetas')
+        self.assertEqual(first['inserted'],1)
+        self.assertEqual(second['inserted'],1)
+        self.assertEqual(second.get('duplicates',0),0)
+        self.assertEqual(len(self.repo.list_movements({'district':'HORQUETAS'})),2)
+
+    def test_xlsx_is_imported_without_excel_installed(self):
+        from openpyxl import Workbook
+        p=self.root/'Fincas.xlsx'
+        wb=Workbook(); ws=wb.active
+        ws.append(['PROVINCIA','NUMERO','DERECHO','FECHA_ULT_ACT'])
+        ws.append([4,903,1,'2026-03-01'])
+        wb.save(p); wb.close()
+        result=self.engine.import_paths([p],year=2026,quarter='T1',district='Horquetas')
+        self.assertEqual(result['inserted'],1)
+        self.assertEqual(self.repo.list_movements({'district':'HORQUETAS'})[0]['folio'],'4-903-001')
+
+    def test_supported_desktop_import_contract_lists_all_required_formats(self):
+        from app.importers.engine import SUPPORTED_IMPORT_FORMATS
+        self.assertEqual(set(SUPPORTED_IMPORT_FORMATS), {'XLS','XLSX','CSV','JSON','TXT','ZIP','RAR'})
 
 if __name__=='__main__': unittest.main()

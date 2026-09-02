@@ -1,0 +1,45 @@
+SENDA.V0 0.4.1 - ACTUALIZACION DEL REPOSITORIO GITHUB
+
+IMPORTANTE
+- No borre %LOCALAPPDATA%\SENDA.V0.
+- Esta actualizacion no reinicia ni reemplaza la base de datos.
+- El EXE Windows se genera en GitHub Actions, no en este paquete fuente.
+
+ARCHIVOS A REEMPLAZAR / AGREGAR
+Raiz:
+  .gitattributes
+  README.md
+  pyproject.toml
+  MANTENIMIENTO_SENDA_V0.bat
+  INSTALAR_DESDE_GITHUB.bat
+  VERIFICACION_DESKTOP_0.4.1.txt
+
+.github/workflows/
+  build-windows-desktop.yml
+
+app/
+  desktop.py
+  repository.py
+
+app/importers/
+  engine.py
+
+scripts/
+  install_desktop.ps1
+  install_from_github.ps1
+
+tests/
+  test_home_statistics_and_github_install.py
+  test_importers.py
+  test_lifecycle_scripts.py
+
+DESPUES DE SUBIR LOS ARCHIVOS
+1. Abra Actions.
+2. Abra "Build SENDA.V0 Windows Desktop".
+3. Pulse "Run workflow" sobre main. No use Re-run jobs de un run viejo.
+4. El workflow debe pasar pruebas, crear SENDA.V0.exe, ejecutar --check y publicar la Release v0.4.1.
+5. En GitHub abra Releases -> Latest y descargue SENDA.V0_0.4.1_WINDOWS_DESKTOP.zip.
+6. Extraiga el ZIP y ejecute INSTALAR_SENDA_V0.bat.
+
+OPCION INSTALAR DESDE GITHUB
+Si tiene una copia del repositorio en Windows, puede ejecutar INSTALAR_DESDE_GITHUB.bat. Descarga la Release mas reciente e instala la aplicacion sin borrar los datos existentes.

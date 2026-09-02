@@ -53,6 +53,6 @@ class OfflineDependencyTests(unittest.TestCase):
         self.assertIn('--name senda.v0',text)
         self.assertIn('xlrd',text)
         self.assertIn('7z.exe',text)
-        self.assertIn('senda.v0_0.4.0_windows_desktop.zip',text)
+        self.assertIn('senda.v0_0.4.1_windows_desktop.zip',text)
 
 if __name__=='__main__':unittest.main()

@@ -11,7 +11,7 @@ if (-not (Test-Path $SourceExe)) {
     throw "No se encontro $ExeName. Use el paquete WINDOWS_DESKTOP compilado desde GitHub Actions."
 }
 
-Write-Host 'SENDA.V0 0.4.0 - INSTALACION DE ESCRITORIO' -ForegroundColor Cyan
+Write-Host 'SENDA.V0 0.4.1 - INSTALACION DE ESCRITORIO' -ForegroundColor Cyan
 Write-Host "Aplicacion: $InstallRoot"
 Write-Host "Datos:      $DataRoot"
 Write-Host 'No usa Chrome, Edge, localhost ni Python instalado por el usuario.'

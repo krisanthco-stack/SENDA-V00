@@ -1,6 +1,6 @@
-# SENDA.V0 0.4.0 · Escritorio Windows
+# SENDA.V0 0.4.1 · Escritorio Windows
 
-SENDA.V0 0.4.0 abandona el navegador como interfaz de la aplicación instalada. La versión Windows usa una ventana de escritorio nativa (Tk/ttk), accede directamente a SQLite y al motor de importación Python, y no necesita Chrome, Edge, `localhost` ni conexión a Internet para trabajar una vez compilada/instalada.
+SENDA.V0 0.4.1 abandona el navegador como interfaz de la aplicación instalada. La versión Windows usa una ventana de escritorio nativa (Tk/ttk), accede directamente a SQLite y al motor de importación Python, y no necesita Chrome, Edge, `localhost` ni conexión a Internet para trabajar una vez compilada/instalada.
 
 ## Estructura funcional
 
@@ -40,12 +40,31 @@ El repositorio incluye `.github/workflows/build-windows-desktop.yml`. Ese workfl
 
 El usuario final no necesita Python, Chrome ni Edge.
 
+## Instalar desde GitHub
+
+El workflow publica automáticamente una **Release** con `SENDA.V0_0.4.1_WINDOWS_DESKTOP.zip`. Hay dos rutas:
+
+1. **Release:** abrir **Releases → Latest**, descargar el ZIP, extraerlo y ejecutar `INSTALAR_SENDA_V0.bat`.
+2. **Desde una copia del repositorio:** ejecutar `INSTALAR_DESDE_GITHUB.bat`; el script consulta la Release más reciente, descarga el paquete oficial y ejecuta el instalador.
+
+En ambos casos la aplicación se instala en `%LOCALAPPDATA%\Programs\SENDA.V0` y los datos permanecen en `%LOCALAPPDATA%\SENDA.V0`.
+
 ## Compilar en GitHub
 
 1. Subir el contenido de este repositorio a GitHub.
 2. Abrir **Actions → Build SENDA.V0 Windows Desktop → Run workflow**.
-3. Descargar el artefacto **SENDA.V0-0.4.0-Windows-Desktop**.
-4. Extraer `SENDA.V0_0.4.0_WINDOWS_DESKTOP.zip` y ejecutar `INSTALAR_SENDA_V0.bat`.
+3. El workflow ejecuta pruebas, construye `SENDA.V0.exe`, valida `--check`, publica el artefacto y actualiza la Release **v0.4.1**.
+
+## Regla anti-duplicados
+
+- SENDA calcula SHA-256 del conjunto de archivos seleccionados. Si el mismo corte ya terminó una importación, no lo vuelve a cargar.
+- Cada movimiento tiene además una firma lógica independiente de `archivo_origen`; un archivo renombrado, otro ZIP/RAR o una nueva exportación con el mismo movimiento no lo duplica.
+- La migración crea el índice de firmas sin borrar movimientos existentes.
+- El resultado de importación separa **nuevos**, **duplicados evitados**, **omitidos por reglas** y **errores**.
+
+## Compatibilidad de carga Desktop
+
+La carga acepta por contenido real: **XLS, XLSX, CSV, JSON, TXT, ZIP y RAR**. XLS binario usa `xlrd` incluido en el build; XLSX usa `openpyxl`; el paquete Windows incorpora 7-Zip para RAR. ZIP/RAR pueden contener carpetas y ZIP anidados.
 
 ## Verificación local de código
 

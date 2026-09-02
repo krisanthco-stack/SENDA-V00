@@ -2,7 +2,7 @@
 :menu
 cls
 echo =====================================
-echo SENDA.V0 0.4.0 - MANTENIMIENTO
+echo SENDA.V0 0.4.1 - MANTENIMIENTO
 echo =====================================
 echo 1. Instalar / Reparar
 echo 2. Actualizar sin borrar datos

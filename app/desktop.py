@@ -20,16 +20,112 @@ from .desktop_model import (
     available_years, create_context, export_movements, filters_from_values, import_files,
 )
 
-APP_TITLE = 'SENDA.V0 0.4.0 · Escritorio'
+APP_TITLE = 'SENDA.V0 0.4.1 · Escritorio'
 BG = '#eef2f6'
 NAVY = '#15314b'
 GOLD = '#cfa43a'
 MUTED = '#65758b'
 WHITE = '#ffffff'
+BLUE = '#0b6fc2'
+BLUE_DARK = '#0a4777'
+PANEL = '#f8fbfe'
+BORDER = '#d6e2ec'
+ALARM_RED = '#dc2626'
+ALARM_YELLOW = '#eab308'
+ALARM_GREEN = '#16a34a'
+CHART_COLORS = ('#0b6fc2','#2563eb','#7c3aed','#0f766e','#ea580c','#be123c','#64748b','#0891b2')
+
+# Escala tipográfica: lectura cómoda sin perder densidad en pantallas de oficina.
+BODY_FONT_SIZE = 10
+PANEL_TITLE_SIZE = 12
+SECTION_TITLE_SIZE = 19
+NAV_FONT_SIZE = 11
+KPI_VALUE_SIZE = 20
+KPI_LABEL_SIZE = 10
+SMALL_FONT_SIZE = 9
 
 
 def _safe_text(value):
     return '' if value is None else str(value)
+
+
+def _rounded_rect(canvas, x1, y1, x2, y2, radius=14, **kwargs):
+    radius = max(2, min(radius, (x2-x1)//2, (y2-y1)//2))
+    points = [x1+radius,y1, x2-radius,y1, x2,y1, x2,y1+radius,
+              x2,y2-radius, x2,y2, x2-radius,y2, x1+radius,y2,
+              x1,y2, x1,y2-radius, x1,y1+radius, x1,y1]
+    return canvas.create_polygon(points, smooth=True, splinesteps=24, **kwargs)
+
+
+class KpiCard(tk.Canvas):
+    """Tarjeta compacta de KPI dibujada en Canvas para evitar el aspecto cuadrado de ttk."""
+    def __init__(self, parent, label, accent=BLUE, **kwargs):
+        super().__init__(parent, height=72, bg=BG, highlightthickness=0, bd=0, **kwargs)
+        self.label = label
+        self.accent = accent
+        self.value = '0'
+        self.bind('<Configure>', lambda e: self._draw())
+
+    def set(self, value):
+        self.value = str(value)
+        self._draw()
+
+    def _draw(self):
+        w=max(90,self.winfo_width()); h=max(68,self.winfo_height())
+        self.delete('all')
+        _rounded_rect(self, 3, 3, w-3, h-4, 14, fill=WHITE, outline=BORDER, width=1)
+        _rounded_rect(self, 4, 4, 10, h-5, 4, fill=self.accent, outline=self.accent)
+        self.create_text(20, 24, anchor='w', text=self.value, fill=NAVY, font=('Segoe UI',KPI_VALUE_SIZE,'bold'))
+        self.create_text(20, 50, anchor='w', text=self.label, fill=MUTED, font=('Segoe UI',KPI_LABEL_SIZE,'bold'))
+
+
+class HorizontalBarChart(tk.Canvas):
+    def __init__(self, parent, **kwargs):
+        super().__init__(parent, bg=WHITE, highlightthickness=0, bd=0, **kwargs)
+        self.data=[]
+        self.bind('<Configure>', lambda e:self._draw())
+
+    def set_data(self, mapping, max_items=8):
+        self.data=list(mapping.items())[:max_items]
+        self._draw()
+
+    def _draw(self):
+        self.delete('all'); w=max(180,self.winfo_width()); h=max(120,self.winfo_height())
+        if not self.data:
+            self.create_text(w/2,h/2,text='Sin datos para el filtro seleccionado',fill=MUTED,font=('Segoe UI',BODY_FONT_SIZE))
+            return
+        maxv=max(v for _,v in self.data) or 1
+        top=8; row=max(20,(h-16)//max(1,len(self.data)))
+        label_w=min(145,max(90,int(w*.34)))
+        for i,(label,value) in enumerate(self.data):
+            y=top+i*row
+            self.create_text(6,y+row/2,anchor='w',text=str(label)[:22],fill=NAVY,font=('Segoe UI',SMALL_FONT_SIZE,'bold'))
+            x1=label_w; x2=w-48; barw=max(2,(x2-x1)*(value/maxv))
+            self.create_rectangle(x1,y+5,x2,y+row-6,fill='#edf3f8',outline='')
+            self.create_rectangle(x1,y+5,x1+barw,y+row-6,fill=CHART_COLORS[i%len(CHART_COLORS)],outline='')
+            self.create_text(w-7,y+row/2,anchor='e',text=f'{value:,}'.replace(',','.'),fill=NAVY,font=('Segoe UI',SMALL_FONT_SIZE,'bold'))
+
+
+class MonthlyLineChart(tk.Canvas):
+    def __init__(self,parent,**kwargs):
+        super().__init__(parent,bg=WHITE,highlightthickness=0,bd=0,**kwargs)
+        self.data={}
+        self.bind('<Configure>',lambda e:self._draw())
+    def set_data(self,mapping): self.data=dict(mapping); self._draw()
+    def _draw(self):
+        self.delete('all');w=max(200,self.winfo_width());h=max(120,self.winfo_height())
+        vals=[int(self.data.get(m,0)) for m in range(1,13)]
+        if not any(vals):
+            self.create_text(w/2,h/2,text='Sin movimientos mensuales',fill=MUTED,font=('Segoe UI',BODY_FONT_SIZE));return
+        left,right,top,bottom=28,w-12,12,h-28;maxv=max(vals) or 1
+        self.create_line(left,bottom,right,bottom,fill=BORDER)
+        pts=[]
+        for idx,val in enumerate(vals):
+            x=left+(right-left)*(idx/11); y=bottom-(bottom-top)*(val/maxv);pts.extend((x,y))
+            self.create_oval(x-3,y-3,x+3,y+3,fill=BLUE,outline=WHITE,width=1)
+            self.create_text(x,bottom+13,text=str(idx+1),fill=MUTED,font=('Segoe UI',SMALL_FONT_SIZE))
+        if len(pts)>=4:self.create_line(*pts,fill=BLUE,width=2,smooth=True)
+        self.create_text(left,top,anchor='w',text=f'Máx. {maxv:,}'.replace(',','.'),fill=MUTED,font=('Segoe UI',SMALL_FONT_SIZE))
 
 
 class SendaDesktop(tk.Tk):
@@ -37,8 +133,8 @@ class SendaDesktop(tk.Tk):
         super().__init__()
         self.ctx = create_context(data_dir)
         self.title(APP_TITLE)
-        self.geometry('1380x820')
-        self.minsize(1180, 700)
+        self.geometry('1440x860')
+        self.minsize(1220, 740)
         self.configure(bg=BG)
         self.protocol('WM_DELETE_WINDOW', self._on_close)
         self._jobs = queue.Queue()
@@ -63,25 +159,31 @@ class SendaDesktop(tk.Tk):
 
     def _configure_style(self):
         style = ttk.Style(self)
-        try: style.theme_use('vista' if os.name == 'nt' else 'clam')
+        try: style.theme_use('clam')
         except Exception: pass
         style.configure('TFrame', background=BG)
         style.configure('Card.TFrame', background=WHITE, relief='solid', borderwidth=1)
-        style.configure('Header.TLabel', background=NAVY, foreground=WHITE, font=('Segoe UI', 11, 'bold'))
-        style.configure('Title.TLabel', background=BG, foreground=NAVY, font=('Segoe UI', 18, 'bold'))
-        style.configure('KpiValue.TLabel', background=WHITE, foreground=NAVY, font=('Segoe UI', 19, 'bold'))
-        style.configure('KpiLabel.TLabel', background=WHITE, foreground=MUTED, font=('Segoe UI', 9, 'bold'))
-        style.configure('Gold.TButton', font=('Segoe UI', 9, 'bold'))
-        style.configure('Treeview', rowheight=27, font=('Segoe UI', 9))
-        style.configure('Treeview.Heading', font=('Segoe UI', 9, 'bold'))
-        style.configure('TNotebook.Tab', padding=(18, 8), font=('Segoe UI', 10, 'bold'))
+        style.configure('Header.TLabel', background=NAVY, foreground=WHITE, font=('Segoe UI', NAV_FONT_SIZE, 'bold'))
+        style.configure('Title.TLabel', background=BG, foreground=NAVY, font=('Segoe UI', SECTION_TITLE_SIZE, 'bold'))
+        style.configure('KpiValue.TLabel', background=WHITE, foreground=NAVY, font=('Segoe UI', KPI_VALUE_SIZE, 'bold'))
+        style.configure('KpiLabel.TLabel', background=WHITE, foreground=MUTED, font=('Segoe UI', KPI_LABEL_SIZE, 'bold'))
+        style.configure('Gold.TButton', font=('Segoe UI', BODY_FONT_SIZE, 'bold'))
+        style.configure('Treeview', rowheight=31, font=('Segoe UI', BODY_FONT_SIZE))
+        style.configure('Treeview.Heading', font=('Segoe UI', BODY_FONT_SIZE, 'bold'))
+        style.configure('TNotebook.Tab', padding=(20, 10), font=('Segoe UI', NAV_FONT_SIZE, 'bold'))
+        style.configure('TNotebook', background=BG, borderwidth=0)
+        style.map('TNotebook.Tab', background=[('selected', WHITE), ('!selected', '#dbe7f1')], foreground=[('selected', BLUE_DARK), ('!selected', NAVY)])
+        style.configure('TLabel', background=BG, foreground=NAVY, font=('Segoe UI', BODY_FONT_SIZE))
+        style.configure('TButton', font=('Segoe UI', BODY_FONT_SIZE, 'bold'), padding=(9, 5))
+        style.configure('TCombobox', padding=3)
+        style.configure('TEntry', padding=4)
 
     def _build_shell(self):
         header = tk.Frame(self, bg=NAVY, height=62)
         header.pack(fill='x')
-        tk.Label(header, text='SENDA.V0', bg=NAVY, fg=WHITE, font=('Segoe UI', 18, 'bold')).pack(side='left', padx=(18,8), pady=13)
-        tk.Label(header, text='Gestión registral local · Escritorio', bg=NAVY, fg='#cbd5df', font=('Segoe UI', 10)).pack(side='left', pady=17)
-        self.connection_badge = tk.Label(header, text='● LOCAL · OFFLINE', bg=NAVY, fg='#7dd3a7', font=('Segoe UI', 9, 'bold'))
+        tk.Label(header, text='SENDA.V0', bg=NAVY, fg=WHITE, font=('Segoe UI', SECTION_TITLE_SIZE, 'bold')).pack(side='left', padx=(18,8), pady=13)
+        tk.Label(header, text='Gestión registral local · Escritorio', bg=NAVY, fg='#cbd5df', font=('Segoe UI', BODY_FONT_SIZE)).pack(side='left', pady=17)
+        self.connection_badge = tk.Label(header, text='● LOCAL · OFFLINE', bg=NAVY, fg='#7dd3a7', font=('Segoe UI', BODY_FONT_SIZE, 'bold'))
         self.connection_badge.pack(side='right', padx=18)
 
         self.notebook = ttk.Notebook(self)
@@ -101,7 +203,7 @@ class SendaDesktop(tk.Tk):
         self._build_management()
 
         self.status_var = tk.StringVar(value=f'Datos: {self.ctx.data_root}')
-        tk.Label(self, textvariable=self.status_var, anchor='w', bg='#dfe6ed', fg=NAVY, font=('Segoe UI', 9)).pack(fill='x', side='bottom', ipady=5, padx=0)
+        tk.Label(self, textvariable=self.status_var, anchor='w', bg='#dfe6ed', fg=NAVY, font=('Segoe UI', BODY_FONT_SIZE)).pack(fill='x', side='bottom', ipady=5, padx=0)
 
     def _filter_bar(self, parent, *, include_movement=True, callback=None):
         bar = ttk.Frame(parent)
@@ -160,39 +262,85 @@ class SendaDesktop(tk.Tk):
         walk(self)
 
     # -------------------- INICIO --------------------
+    def _panel(self, parent, title):
+        frame=tk.Frame(parent,bg=WHITE,highlightbackground=BORDER,highlightthickness=1,bd=0)
+        head=tk.Frame(frame,bg=WHITE);head.pack(fill='x',padx=12,pady=(9,2))
+        tk.Label(head,text=title,bg=WHITE,fg=NAVY,font=('Segoe UI',PANEL_TITLE_SIZE,'bold')).pack(side='left')
+        return frame
+
+    def _action_button(self,parent,text,command,primary=False):
+        return tk.Button(parent,text=text,command=command,bg=(BLUE if primary else WHITE),fg=(WHITE if primary else NAVY),
+                         activebackground=(BLUE_DARK if primary else '#edf3f8'),activeforeground=(WHITE if primary else NAVY),
+                         relief='flat',bd=0,padx=12,pady=5,font=('Segoe UI',BODY_FONT_SIZE,'bold'),cursor='hand2',
+                         highlightbackground=BORDER,highlightthickness=(0 if primary else 1))
+
     def _build_home(self):
-        top = ttk.Frame(self.tab_home); top.pack(fill='x', pady=(2,8))
-        ttk.Label(top, text='Inicio', style='Title.TLabel').pack(side='left')
-        ttk.Button(top, text='Cargar datos', command=self._choose_import).pack(side='right', padx=4)
-        ttk.Button(top, text='Exportar Excel', command=lambda:self._export('xlsx')).pack(side='right', padx=4)
-        ttk.Button(top, text='Exportar JSON', command=lambda:self._export('json')).pack(side='right', padx=4)
-        ttk.Button(top, text='Exportar CSV', command=lambda:self._export('csv')).pack(side='right', padx=4)
-        self.home_filters = self._filter_bar(self.tab_home, callback=self.refresh_home)
-        self.kpi_frame = ttk.Frame(self.tab_home); self.kpi_frame.pack(fill='x')
-        self.kpi_vars = {}
-        for key,label in [('movimientos','MOVIMIENTOS'),('folios','FOLIOS / FINCAS'),('movimientos_tramite','EN CONTROL / GESTIÓN'),('casos_control','CONTROL'),('casos_gestion','GESTIÓN')]:
-            card=ttk.Frame(self.kpi_frame,style='Card.TFrame');card.pack(side='left',fill='x',expand=True,padx=(0,8),pady=4)
-            v=tk.StringVar(value='0');self.kpi_vars[key]=v
-            ttk.Label(card,textvariable=v,style='KpiValue.TLabel').pack(anchor='w',padx=12,pady=(10,0))
-            ttk.Label(card,text=label,style='KpiLabel.TLabel').pack(anchor='w',padx=12,pady=(0,10))
-        body = ttk.Frame(self.tab_home); body.pack(fill='both', expand=True, pady=8)
-        left=ttk.Frame(body,style='Card.TFrame');left.pack(side='left',fill='both',expand=True,padx=(0,8))
-        right=ttk.Frame(body,style='Card.TFrame',width=330);right.pack(side='right',fill='y');right.pack_propagate(False)
-        ttk.Label(left,text='Movimientos por tipo',font=('Segoe UI',11,'bold'),background=WHITE,foreground=NAVY).pack(anchor='w',padx=12,pady=10)
-        self.home_category_tree=self._tree(left, [('tipo',230),('movimientos',120)], headings=('Movimiento','Cantidad'))
-        ttk.Label(right,text='Información SENDA',font=('Segoe UI',11,'bold'),background=WHITE,foreground=NAVY).pack(anchor='w',padx=12,pady=(10,4))
-        self.home_info_text=tk.Text(right,height=15,wrap='word',bg=WHITE,relief='flat',font=('Segoe UI',9))
-        self.home_info_text.pack(fill='both',expand=True,padx=10,pady=(0,10))
+        top=tk.Frame(self.tab_home,bg=BG);top.pack(fill='x',pady=(1,6))
+        tk.Label(top,text='Inicio',bg=BG,fg=NAVY,font=('Segoe UI',SECTION_TITLE_SIZE,'bold')).pack(side='left')
+        self._action_button(top,'CARGAR DATOS',self._choose_import,True).pack(side='right',padx=(6,0))
+        self._action_button(top,'EXCEL',lambda:self._export('xlsx')).pack(side='right',padx=3)
+        self._action_button(top,'JSON',lambda:self._export('json')).pack(side='right',padx=3)
+        self._action_button(top,'CSV',lambda:self._export('csv')).pack(side='right',padx=3)
+
+        self.home_filters=self._filter_bar(self.tab_home,callback=self.refresh_home)
+
+        self.kpi_frame=tk.Frame(self.tab_home,bg=BG);self.kpi_frame.pack(fill='x',pady=(0,7))
+        self.kpi_cards={}
+        specs=[('movimientos','MOVIMIENTOS',BLUE),('folios','FOLIOS / FINCAS','#2563eb'),
+               ('movimientos_tramite','MOV. CONTROL / GESTIÓN','#7c3aed'),('casos_control','EN CONTROL','#0f766e'),
+               ('casos_gestion','EN GESTIÓN','#0891b2'),('alarmas_rojas','ALARMAS ROJAS',ALARM_RED)]
+        for key,label,accent in specs:
+            c=KpiCard(self.kpi_frame,label,accent=accent);c.pack(side='left',fill='x',expand=True,padx=(0,7));self.kpi_cards[key]=c
+
+        body=tk.Frame(self.tab_home,bg=BG);body.pack(fill='both',expand=True)
+        body.grid_columnconfigure(0,weight=1);body.grid_columnconfigure(1,weight=0,minsize=310);body.grid_rowconfigure(0,weight=1)
+        main=tk.Frame(body,bg=BG);main.grid(row=0,column=0,sticky='nsew',padx=(0,8));main.grid_rowconfigure(0,weight=3);main.grid_rowconfigure(1,weight=2);main.grid_columnconfigure(0,weight=1)
+        side=tk.Frame(body,bg=BG,width=310);side.grid(row=0,column=1,sticky='nsew');side.grid_propagate(False)
+
+        charts=tk.Frame(main,bg=BG);charts.grid(row=0,column=0,sticky='nsew');
+        for i in range(3):charts.grid_columnconfigure(i,weight=1)
+        charts.grid_rowconfigure(0,weight=1)
+        p1=self._panel(charts,'Movimientos por categoría');p1.grid(row=0,column=0,sticky='nsew',padx=(0,6));self.home_category_chart=HorizontalBarChart(p1,height=205);self.home_category_chart.pack(fill='both',expand=True,padx=8,pady=(2,8))
+        p2=self._panel(charts,'Movimientos por distrito');p2.grid(row=0,column=1,sticky='nsew',padx=3);self.home_district_chart=HorizontalBarChart(p2,height=205);self.home_district_chart.pack(fill='both',expand=True,padx=8,pady=(2,8))
+        p3=self._panel(charts,'Evolución mensual');p3.grid(row=0,column=2,sticky='nsew',padx=(6,0));self.home_month_chart=MonthlyLineChart(p3,height=205);self.home_month_chart.pack(fill='both',expand=True,padx=8,pady=(2,8))
+
+        recent=self._panel(main,'Movimientos recientes');recent.grid(row=1,column=0,sticky='nsew',pady=(7,0))
+        self.home_recent_tree=self._tree(recent,[('folio',115),('plano',110),('fecha',85),('movimiento',105),('codigo',65),('operacion',280),('distrito',125)],headings=('Folio','Plano','Fecha','Movimiento','Código','Operación','Distrito'))
+
+        info=self._panel(side,'Información SENDA');info.pack(fill='x',pady=(0,7))
+        self.home_info_var=tk.StringVar(value='Datos locales')
+        tk.Label(info,textvariable=self.home_info_var,bg=WHITE,fg=MUTED,justify='left',anchor='w',font=('Segoe UI',SMALL_FONT_SIZE)).pack(fill='x',padx=12,pady=(3,10))
+
+        alarms=self._panel(side,'🚨 Alarmas');alarms.pack(fill='x',pady=(0,7))
+        self.alarm_vars={}
+        for key,label,color,soft in [('red','90 días o más',ALARM_RED,'#fee2e2'),('yellow','Más de 60 días',ALARM_YELLOW,'#fef9c3'),('green','Hasta 60 días',ALARM_GREEN,'#dcfce7')]:
+            row=tk.Frame(alarms,bg=soft,height=34);row.pack(fill='x',padx=9,pady=3);row.pack_propagate(False)
+            tk.Frame(row,bg=color,width=5).pack(side='left',fill='y')
+            tk.Label(row,text='●',bg=soft,fg=color,font=('Segoe UI',BODY_FONT_SIZE,'bold')).pack(side='left',padx=(8,4))
+            tk.Label(row,text=label,bg=soft,fg=NAVY,font=('Segoe UI',SMALL_FONT_SIZE,'bold')).pack(side='left')
+            v=tk.StringVar(value='0');self.alarm_vars[key]=v;tk.Label(row,textvariable=v,bg=soft,fg=NAVY,font=('Segoe UI',BODY_FONT_SIZE,'bold')).pack(side='right',padx=9)
+
+        dist=self._panel(side,'Distritos');dist.pack(fill='both',expand=True)
+        self.home_district_text=tk.Text(dist,height=9,wrap='word',bg=WHITE,fg=NAVY,relief='flat',font=('Segoe UI',BODY_FONT_SIZE),cursor='arrow')
+        self.home_district_text.pack(fill='both',expand=True,padx=10,pady=(3,9))
 
     def refresh_home(self):
         self._refresh_years(self.home_filters)
-        data=self.ctx.repo.dashboard(self._filters(self.home_filters))
-        for k,v in self.kpi_vars.items():v.set(f"{int(data.get(k,0)):,}".replace(',','.'))
-        self._replace_tree(self.home_category_tree, [(k,v) for k,v in data.get('por_categoria',{}).items()])
+        filters=self._filters(self.home_filters)
+        data=self.ctx.repo.dashboard(filters)
+        for k,c in self.kpi_cards.items():
+            value=data.get(k,0) if k!='alarmas_rojas' else data.get('alarmas',{}).get('red',0)
+            c.set(f"{int(value):,}".replace(',','.'))
+        self.home_category_chart.set_data(data.get('por_categoria',{}),8)
+        self.home_district_chart.set_data(data.get('por_distrito',{}),6)
+        self.home_month_chart.set_data(data.get('por_mes',{}))
         a=data.get('alarmas',{})
-        lines=[f"Datos locales: {self.ctx.data_root}", '', f"Alarmas rojas: {a.get('red',0)}", f"Alarmas amarillas: {a.get('yellow',0)}", f"Alarmas verdes: {a.get('green',0)}", '', 'Distritos:']
-        lines += [f"  {k}: {v}" for k,v in data.get('por_distrito',{}).items()]
-        self.home_info_text.configure(state='normal');self.home_info_text.delete('1.0','end');self.home_info_text.insert('1.0','\n'.join(lines));self.home_info_text.configure(state='disabled')
+        for k,v in self.alarm_vars.items():v.set(f"{int(a.get(k,0)):,}".replace(',','.'))
+        self.home_info_var.set(f"Datos locales\n{self.ctx.data_root}\n\nFiltro activo: {filters or 'Todos los datos'}")
+        dlines=[f"{k}: {int(v):,}".replace(',','.') for k,v in data.get('por_distrito',{}).items()]
+        self.home_district_text.configure(state='normal');self.home_district_text.delete('1.0','end');self.home_district_text.insert('1.0','\n'.join(dlines) if dlines else 'Sin datos');self.home_district_text.configure(state='disabled')
+        recent=[(r.get('folio',''),r.get('plano',''),r.get('fecha',''),r.get('categoria',''),r.get('codigo',''),r.get('operacion',''),r.get('distrito','')) for r in data.get('recientes',[])]
+        self._replace_tree(self.home_recent_tree,recent)
 
     def _choose_import(self):
         paths=filedialog.askopenfilenames(title='Cargar datos SENDA', filetypes=[('Archivos SENDA','*.xls *.xlsx *.csv *.json *.txt *.zip *.rar'),('Todos','*.*')])
@@ -203,8 +351,9 @@ class SendaDesktop(tk.Tk):
             ttk.Label(dialog,text=label).grid(row=i,column=0,sticky='w',padx=12,pady=8)
             if vals:ttk.Combobox(dialog,textvariable=var,values=vals,state='readonly',width=24).grid(row=i,column=1,padx=12,pady=8)
             else:ttk.Entry(dialog,textvariable=var,width=26).grid(row=i,column=1,padx=12,pady=8)
-        ttk.Label(dialog,text=f'{len(paths)} archivo(s) seleccionados').grid(row=3,column=0,columnspan=2,padx=12,pady=4)
-        ttk.Button(dialog,text='Importar',command=lambda:self._start_import(dialog,paths,year.get(),quarter.get(),district.get())).grid(row=4,column=0,columnspan=2,pady=12)
+        ttk.Label(dialog,text=f'{len(paths)} archivo(s) seleccionados · XLS / XLSX / CSV / JSON / TXT / ZIP / RAR').grid(row=3,column=0,columnspan=2,padx=12,pady=4)
+        ttk.Label(dialog,text='Los archivos y movimientos repetidos se detectan y no se duplican.',foreground=MUTED).grid(row=4,column=0,columnspan=2,padx=12,pady=(0,4))
+        ttk.Button(dialog,text='Importar',command=lambda:self._start_import(dialog,paths,year.get(),quarter.get(),district.get())).grid(row=5,column=0,columnspan=2,pady=12)
 
     def _start_import(self, dialog, paths, year, quarter, district):
         try:y=int(year)
@@ -313,7 +462,7 @@ class SendaDesktop(tk.Tk):
         top=ttk.Frame(right);top.pack(fill='x');self.control_title=tk.StringVar(value='Seleccione un trámite');ttk.Label(top,textvariable=self.control_title,font=('Segoe UI',13,'bold')).pack(side='left')
         self.finalize_btn=ttk.Button(top,text='FINALIZAR',command=self._finalize_active_case,state='disabled');self.finalize_btn.pack(side='right')
         ttk.Button(top,text='Editar expediente',command=lambda:self._case_editor(self._active_control_id)).pack(side='right',padx=5)
-        self.control_summary=tk.Text(right,height=7,bg=WHITE,relief='solid',borderwidth=1,font=('Segoe UI',9));self.control_summary.pack(fill='x',pady=6)
+        self.control_summary=tk.Text(right,height=7,bg=WHITE,relief='solid',borderwidth=1,font=('Segoe UI',BODY_FONT_SIZE));self.control_summary.pack(fill='x',pady=6)
         catbar=ttk.Frame(right);catbar.pack(fill='x');self.control_category=tk.StringVar(value='TODOS')
         ttk.Label(catbar,text='MOVIMIENTOS').pack(side='left',padx=(0,6))
         for cat in MOVEMENT_CATEGORIES:
@@ -431,7 +580,13 @@ class SendaDesktop(tk.Tk):
             while True:
                 kind,payload=self._jobs.get_nowait()
                 if kind=='import_done':
-                    self.status_var.set(f"Importación terminada: {payload['inserted']} insertados, {payload['skipped']} omitidos, {payload['errors']} errores");self.refresh_all();messagebox.showinfo('SENDA',f"Importación completada.\n\nInsertados: {payload['inserted']}\nOmitidos: {payload['skipped']}\nErrores: {payload['errors']}")
+                    duplicates=int(payload.get('duplicates',0)); repeated=bool(payload.get('duplicate_import'))
+                    self.status_var.set(f"Importación terminada: {payload['inserted']} nuevos, {duplicates} duplicados, {payload['skipped']} omitidos, {payload['errors']} errores")
+                    self.refresh_all()
+                    if repeated:
+                        messagebox.showinfo('SENDA','Archivo/corte ya cargado. No se duplicó ningún movimiento.')
+                    else:
+                        messagebox.showinfo('SENDA',f"Importación completada.\n\nNuevos: {payload['inserted']}\nDuplicados evitados: {duplicates}\nOmitidos por reglas: {payload['skipped']}\nErrores: {payload['errors']}")
                 elif kind=='export_done':self.status_var.set(f'Exportación creada: {payload}');messagebox.showinfo('SENDA','Exportación creada correctamente.')
                 elif kind=='error':self.status_var.set('Ocurrió un error. SENDA sigue abierta.');messagebox.showerror('SENDA',payload)
         except queue.Empty:pass
