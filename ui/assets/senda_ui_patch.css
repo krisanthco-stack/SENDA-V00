@@ -1,0 +1,117 @@
+/* SENDA 0.4.3 - parche visual de estados y selección de texto
+   Objetivo: color únicamente en el texto del estado; nunca cubrir filas/tarjetas.
+*/
+
+:root {
+  --senda-status-red: #b42318;
+  --senda-status-yellow: #8a6100;
+  --senda-status-green: #067647;
+}
+
+/* Estado base: texto destacado, sin cortina de fondo. */
+.senda-status {
+  display: inline;
+  font-weight: 700;
+  background: transparent !important;
+  box-shadow: none !important;
+  border: 0 !important;
+}
+
+.senda-status--red {
+  color: var(--senda-status-red) !important;
+}
+
+.senda-status--yellow {
+  color: var(--senda-status-yellow) !important;
+}
+
+.senda-status--green {
+  color: var(--senda-status-green) !important;
+}
+
+/* Compatibilidad con nombres de clases usados habitualmente en versiones previas.
+   Se neutraliza el fondo y se conserva únicamente el color tipográfico. */
+.estado-rojo,
+.estado-red,
+.status-red,
+.status-danger,
+.alerta-roja,
+.alarma-roja,
+[data-status="red"],
+[data-status="rojo"] {
+  color: var(--senda-status-red) !important;
+  background: transparent !important;
+  background-color: transparent !important;
+  box-shadow: none !important;
+}
+
+.estado-amarillo,
+.estado-yellow,
+.status-yellow,
+.status-warning,
+.alerta-amarilla,
+.alarma-amarilla,
+[data-status="yellow"],
+[data-status="amarillo"] {
+  color: var(--senda-status-yellow) !important;
+  background: transparent !important;
+  background-color: transparent !important;
+  box-shadow: none !important;
+}
+
+.estado-verde,
+.estado-green,
+.status-green,
+.status-success,
+.alerta-verde,
+.alarma-verde,
+[data-status="green"],
+[data-status="verde"] {
+  color: var(--senda-status-green) !important;
+  background: transparent !important;
+  background-color: transparent !important;
+  box-shadow: none !important;
+}
+
+/* Permitir seleccionar y copiar texto con mouse en las zonas de consulta. */
+.senda-selectable,
+.senda-selectable *,
+[data-senda-selectable="true"],
+[data-senda-selectable="true"] * {
+  -webkit-user-select: text !important;
+  user-select: text !important;
+}
+
+/* Los controles conservan comportamiento normal de interacción y no arrastran texto. */
+.senda-selectable button,
+.senda-selectable input,
+.senda-selectable select,
+.senda-selectable textarea,
+.senda-selectable option,
+.senda-selectable [role="button"],
+.senda-selectable [role="checkbox"],
+.senda-selectable [draggable="true"],
+[data-senda-selectable="true"] button,
+[data-senda-selectable="true"] input,
+[data-senda-selectable="true"] select,
+[data-senda-selectable="true"] textarea,
+[data-senda-selectable="true"] [role="button"],
+[data-senda-selectable="true"] [role="checkbox"] {
+  -webkit-user-select: none !important;
+  user-select: none !important;
+}
+
+/* Texto dentro de celdas, detalles y etiquetas sí debe poder copiarse. */
+.senda-selectable td,
+.senda-selectable th,
+.senda-selectable p,
+.senda-selectable span,
+.senda-selectable div,
+.senda-selectable label,
+.senda-selectable code,
+.senda-selectable pre,
+.senda-selectable dd,
+.senda-selectable dt {
+  -webkit-user-select: text !important;
+  user-select: text !important;
+}
