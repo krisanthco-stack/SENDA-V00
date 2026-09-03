@@ -5,7 +5,7 @@ const state = {
   health:null,
   module:'inicio',
   info:{type:'TODOS',offset:0,pageSize:25,total:0,rows:[],selected:new Map()},
-  control:{selectedId:null,type:'TODOS',offset:0,pageSize:25,total:0,detail:null},
+  control:{selectedId:null,type:'TODOS',offset:0,pageSize:25,total:0,detail:null,pageRows:[],selectedMovements:new Map()},
   management:{rows:[]}
 };
 
@@ -39,6 +39,62 @@ function barChart(id,data){const box=$(id),entries=Object.entries(data||{}).sort
 function alarmPill(a){return `<span class="pill ${a}">${a==='red'?'🔴 Roja':a==='yellow'?'🟡 Amarilla':'🟢 Verde'}</span>`}
 function statusPill(s){const cls=s==='EN CONTROL'?'control':s==='GESTION'?'gestion':'info';return `<span class="status ${cls}">${esc(s||'INFORMACION')}</span>`}
 function movementLabel(r){return r.categoria||r.tipo||r.fuente||'OTROS'}
+
+function movementKey(r,index=0){
+  const rawId=r?.id??r?.movement_id??r?.movimiento_id;
+  if(rawId!==undefined&&rawId!==null&&String(rawId)!=='')return `id:${rawId}`;
+  const base=[
+    state.control.selectedId||'case',
+    r?.fecha||'',r?.derecho||'',r?.folio||'',r?.plano||'',
+    movementLabel(r||{}),r?.codigo||'',r?.operacion||'',r?.titular||''
+  ].join('|');
+  return `row:${base}|${state.control.offset+index}`;
+}
+function ensureControlSelectionUi(){
+  const table=$('controlMovementRows')?.closest('table');
+  const headRow=table?.querySelector('thead tr');
+  if(headRow&&!headRow.querySelector('.movement-select-head')){
+    const th=document.createElement('th');
+    th.className='movement-select-head';
+    th.innerHTML='<input id="controlSelectPage" type="checkbox" aria-label="Seleccionar movimientos visibles" title="Seleccionar movimientos visibles">';
+    headRow.prepend(th);
+    th.querySelector('#controlSelectPage').addEventListener('change',e=>{
+      state.control.pageRows.forEach((row,index)=>{
+        const key=movementKey(row,index);
+        if(e.target.checked)state.control.selectedMovements.set(key,row);
+        else state.control.selectedMovements.delete(key);
+      });
+      updateControlMovementSelection();
+    });
+  }
+  const meta=document.querySelector('.movement-meta');
+  if(meta&&!$('controlSelectedCount')){
+    const box=document.createElement('div');
+    box.className='control-selection-tools';
+    box.innerHTML='<b id="controlSelectedCount">0 seleccionados</b><button id="controlClearSelection" class="btn mini" type="button">LIMPIAR SELECCIÓN</button>';
+    meta.prepend(box);
+    $('controlClearSelection').onclick=()=>{
+      state.control.selectedMovements.clear();
+      updateControlMovementSelection();
+    };
+  }
+}
+function updateControlMovementSelection(){
+  if($('controlSelectedCount'))$('controlSelectedCount').textContent=`${state.control.selectedMovements.size} seleccionados`;
+  qsa('#controlMovementRows input[type=checkbox][data-movement-key]').forEach(cb=>{
+    cb.checked=state.control.selectedMovements.has(cb.dataset.movementKey);
+  });
+  const selectPage=$('controlSelectPage');
+  if(selectPage){
+    const keys=state.control.pageRows.map((row,index)=>movementKey(row,index));
+    const selected=keys.filter(key=>state.control.selectedMovements.has(key)).length;
+    selectPage.checked=keys.length>0&&selected===keys.length;
+    selectPage.indeterminate=selected>0&&selected<keys.length;
+  }
+}
+function selectedControlMovements(){
+  return [...state.control.selectedMovements.values()];
+}
 
 async function loadDashboard(){
   try{
@@ -97,9 +153,42 @@ async function loadControl(){
   try{const r=await api('/api/control?search='+encodeURIComponent($('controlSearch').value));$('controlCount').textContent=(r.rows||[]).length;$('controlList').innerHTML=(r.rows||[]).map(c=>`<div class="control-item ${state.control.selectedId===c.id?'active':''}" data-case-id="${c.id}"><b>${esc(c.folio||c.plano||'Expediente '+c.id)}</b><small>${esc(c.distrito)} · ${esc(c.responsable||'Sin responsable')}</small><small>${esc(c.prioridad||'NORMAL')} · EN CONTROL</small></div>`).join('')||'<div class="empty">No hay trámites en Control.</div>';qsa('.control-item[data-case-id]').forEach(x=>x.onclick=()=>openControlCase(Number(x.dataset.caseId)))}catch(e){toast(e.message)}
 }
 async function openControlCase(id){
-  try{const d=await api(`/api/cases/${id}`);state.control.selectedId=id;state.control.detail=d;state.control.offset=0;state.control.type='TODOS';$('controlTitle').textContent=d.case.folio||d.case.plano||`Expediente ${id}`;$('controlSubtitle').textContent=`${d.movimientos_total} movimientos · ${d.case.distrito}`;$('controlFinalize').disabled=false;$('controlEmpty').classList.add('hidden');$('controlBody').classList.remove('hidden');$('editFolio').value=d.case.folio||'';$('editPlano').value=d.case.plano||'';$('editDistrict').value=d.case.distrito||'SIN IDENTIFICAR';$('editResponsible').value=d.case.responsable||'';$('editPriority').value=d.case.prioridad||'NORMAL';$('editNote').value=d.case.note||'';$('rightsBox').innerHTML=(d.derechos||[]).map(x=>`<details class="right-detail"><summary>${esc(x.derecho)} · ${x.movimientos} movimiento(s)</summary><div>Primer movimiento: <b>${esc(x.primera_fecha||'—')}</b> · Último movimiento: <b>${esc(x.ultima_fecha||'—')}</b></div></details>`).join('')||'<span class="right-chip">Sin derechos vinculados</span>';$('controlAudit').innerHTML=(d.audit||[]).map(a=>`<div class="audit-event"><b>${esc(a.action)}</b> · ${esc(a.created_at)}<br>${esc(a.previous_status||'')} ${a.new_status?'→ '+esc(a.new_status):''}${a.note?'<br>'+esc(a.note):''}</div>`).join('')||'<div class="empty">Sin historial.</div>';qsa('[data-control-type]').forEach(b=>b.classList.toggle('active',b.dataset.controlType==='TODOS'));await loadControlMovements();await loadControl()}catch(e){toast(e.message)}
+  try{const changingCase=state.control.selectedId!==id;if(changingCase)state.control.selectedMovements.clear();const d=await api(`/api/cases/${id}`);state.control.selectedId=id;state.control.detail=d;state.control.offset=0;state.control.type='TODOS';$('controlTitle').textContent=d.case.folio||d.case.plano||`Expediente ${id}`;$('controlSubtitle').textContent=`${d.movimientos_total} movimientos · ${d.case.distrito}`;$('controlFinalize').disabled=false;$('controlEmpty').classList.add('hidden');$('controlBody').classList.remove('hidden');$('editFolio').value=d.case.folio||'';$('editPlano').value=d.case.plano||'';$('editDistrict').value=d.case.distrito||'SIN IDENTIFICAR';$('editResponsible').value=d.case.responsable||'';$('editPriority').value=d.case.prioridad||'NORMAL';$('editNote').value=d.case.note||'';$('rightsBox').innerHTML=(d.derechos||[]).map(x=>`<details class="right-detail"><summary>${esc(x.derecho)} · ${x.movimientos} movimiento(s)</summary><div>Primer movimiento: <b>${esc(x.primera_fecha||'—')}</b> · Último movimiento: <b>${esc(x.ultima_fecha||'—')}</b></div></details>`).join('')||'<span class="right-chip">Sin derechos vinculados</span>';$('controlAudit').innerHTML=(d.audit||[]).map(a=>`<div class="audit-event"><b>${esc(a.action)}</b> · ${esc(a.created_at)}<br>${esc(a.previous_status||'')} ${a.new_status?'→ '+esc(a.new_status):''}${a.note?'<br>'+esc(a.note):''}</div>`).join('')||'<div class="empty">Sin historial.</div>';qsa('[data-control-type]').forEach(b=>b.classList.toggle('active',b.dataset.controlType==='TODOS'));await loadControlMovements();await loadControl()}catch(e){toast(e.message)}
 }
-async function loadControlMovements(){if(!state.control.selectedId)return;state.control.pageSize=Number($('controlPageSize').value||25);try{const r=await api(`/api/cases/${state.control.selectedId}/movements?`+query({movement_type:state.control.type,page_size:state.control.pageSize,offset:state.control.offset}));state.control.total=r.total||0;$('controlMovementCount').textContent=`${r.total||0} movimientos`;$('controlMovementRows').innerHTML=(r.rows||[]).map(x=>`<tr><td>${esc(x.fecha||'—')}</td><td>${esc(x.derecho||'—')}</td><td>${esc(x.plano||'—')}</td><td>${esc(movementLabel(x))}</td><td>${esc(x.codigo||'—')}</td><td>${esc(x.operacion||'—')}</td><td>${esc(x.titular||'—')}</td></tr>`).join('')||'<tr><td colspan="7">Sin movimientos de esta categoría.</td></tr>';const page=Math.floor(state.control.offset/state.control.pageSize)+1,pages=Math.max(1,Math.ceil(state.control.total/state.control.pageSize));$('controlPager').textContent=`Página ${page} de ${pages}`;$('controlPrev').disabled=state.control.offset===0;$('controlNext').disabled=state.control.offset+state.control.pageSize>=state.control.total}catch(e){toast(e.message)}}
+async function loadControlMovements(){
+  if(!state.control.selectedId)return;
+  state.control.pageSize=Number($('controlPageSize').value||25);
+  ensureControlSelectionUi();
+  try{
+    const r=await api(`/api/cases/${state.control.selectedId}/movements?`+query({
+      movement_type:state.control.type,
+      page_size:state.control.pageSize,
+      offset:state.control.offset
+    }));
+    state.control.total=r.total||0;
+    state.control.pageRows=r.rows||[];
+    $('controlMovementCount').textContent=`${r.total||0} movimientos`;
+    $('controlMovementRows').innerHTML=state.control.pageRows.map((x,index)=>{
+      const key=movementKey(x,index);
+      return `<tr>
+        <td><input type="checkbox" class="control-movement-check" data-movement-key="${esc(key)}" aria-label="Seleccionar movimiento"></td>
+        <td>${esc(x.fecha||'—')}</td>
+        <td>${esc(x.derecho||'—')}</td>
+        <td>${esc(x.plano||'—')}</td>
+        <td>${esc(movementLabel(x))}</td>
+        <td>${esc(x.codigo||'—')}</td>
+        <td>${esc(x.operacion||'—')}</td>
+        <td>${esc(x.titular||'—')}</td>
+      </tr>`;
+    }).join('')||'<tr><td colspan="8">Sin movimientos de esta categoría.</td></tr>';
+    const page=Math.floor(state.control.offset/state.control.pageSize)+1;
+    const pages=Math.max(1,Math.ceil(state.control.total/state.control.pageSize));
+    $('controlPager').textContent=`Página ${page} de ${pages}`;
+    $('controlPrev').disabled=state.control.offset===0;
+    $('controlNext').disabled=state.control.offset+state.control.pageSize>=state.control.total;
+    updateControlMovementSelection();
+  }catch(e){toast(e.message)}
+}
 async function saveControlCase(){if(!state.control.selectedId)return;const body={folio:$('editFolio').value,plano:$('editPlano').value,distrito:$('editDistrict').value,responsable:$('editResponsible').value,prioridad:$('editPriority').value,note:$('editNote').value};try{await api(`/api/cases/${state.control.selectedId}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});toast('Expediente actualizado');await openControlCase(state.control.selectedId)}catch(e){toast(e.message)}}
 async function finalizeControlCase(){if(!state.control.selectedId)return;if(!confirm('¿Finalizar este trámite? Saldrá de Información SENDA y Control y pasará a Gestión. Los movimientos originales se conservan.'))return;try{await api(`/api/cases/${state.control.selectedId}/finalize`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({note:$('editNote').value})});toast('Trámite finalizado y enviado a Gestión');state.control.selectedId=null;state.control.detail=null;$('controlFinalize').disabled=true;$('controlBody').classList.add('hidden');$('controlEmpty').classList.remove('hidden');$('controlTitle').textContent='SELECCIONE UN TRÁMITE';await loadControl();await loadInformation(true);await loadManagement();await loadDashboard()}catch(e){toast(e.message)}}
 
@@ -115,6 +204,16 @@ $('infoSelectPage').onchange=e=>{state.info.rows.forEach(x=>{const key=`${x.foli
 $('infoRows').addEventListener('change',e=>{const cb=e.target.closest('input[type=checkbox][data-key]');if(!cb)return;if(cb.checked)state.info.selected.set(cb.dataset.key,{folio:cb.dataset.folio,plano:cb.dataset.plano});else state.info.selected.delete(cb.dataset.key);updateInfoSelection()});
 $('infoRows').addEventListener('click',e=>{const b=e.target.closest('.info-view');if(b)openInformationEntity(b.dataset.folio,b.dataset.plano)});
 qsa('[data-info-type]').forEach(b=>b.onclick=()=>{state.info.type=b.dataset.infoType;qsa('[data-info-type]').forEach(x=>x.classList.toggle('active',x===b));loadInformation(true)});
+$('controlMovementRows').addEventListener('change',e=>{
+  const cb=e.target.closest('input[type=checkbox][data-movement-key]');
+  if(!cb)return;
+  const index=[...$('controlMovementRows').querySelectorAll('input[type=checkbox][data-movement-key]')].indexOf(cb);
+  const row=state.control.pageRows[index];
+  if(!row)return;
+  if(cb.checked)state.control.selectedMovements.set(cb.dataset.movementKey,row);
+  else state.control.selectedMovements.delete(cb.dataset.movementKey);
+  updateControlMovementSelection();
+});
 $('controlRefresh').onclick=loadControl;$('controlSave').onclick=saveControlCase;$('controlFinalize').onclick=finalizeControlCase;$('controlPageSize').onchange=()=>{state.control.offset=0;loadControlMovements()};$('controlPrev').onclick=()=>{state.control.offset=Math.max(0,state.control.offset-state.control.pageSize);loadControlMovements()};$('controlNext').onclick=()=>{state.control.offset+=state.control.pageSize;loadControlMovements()};qsa('[data-control-type]').forEach(b=>b.onclick=()=>{state.control.type=b.dataset.controlType;state.control.offset=0;qsa('[data-control-type]').forEach(x=>x.classList.toggle('active',x===b));loadControlMovements()});
 $('managementRefresh').onclick=loadManagement;
 qsa('[data-export]').forEach(b=>b.onclick=()=>{if(isGitHubPages)return toast(apiUnavailableMessage());location.href='/api/export/'+b.dataset.export+'?'+query(filters())});
